@@ -110,10 +110,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
+          mapfile -t ASSETS < <(find release-artifacts -type f | sort)
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-artifacts/* --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
           else
-            gh release create "$TAG" release-artifacts/* \
+            gh release create "$TAG" "${ASSETS[@]}" \
               --title "SiKomputer $TAG" \
               --generate-notes
           fi
