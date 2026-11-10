@@ -20,7 +20,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: python3 scripts/build-portables.py
+      - run: python3 scripts/build-portables.py --only web,mac
       - uses: actions/upload-artifact@v4
         with:
           name: release-web-mac
@@ -39,7 +39,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: python scripts/build-portables.py
+      - run: python scripts/build-portables.py --only exe
       - uses: actions/upload-artifact@v4
         with:
           name: release-windows-exe
@@ -57,7 +57,15 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      - name: Accept Android SDK Licenses & Verify Tools
+        run: |
+          SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "Using ANDROID_HOME=$SDK_DIR"
+          mkdir -p "$SDK_DIR/licenses"
+          SDKMAN=$(find "$SDK_DIR/cmdline-tools" -name sdkmanager -type f 2>/dev/null | head -n 1)
+          if [ -n "$SDKMAN" ]; then
+            yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
+          fi
       - run: npm ci
       - run: npm run build
       - name: Decode Android Keystore if configured in GitHub Secrets
@@ -73,7 +81,7 @@ jobs:
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: python3 scripts/build-portables.py
+        run: python3 scripts/build-portables.py --only apk
       - uses: actions/upload-artifact@v4
         with:
           name: release-android-apk
@@ -102,7 +110,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
-          gh release delete "$TAG" --yes >/dev/null 2>&1 || true
-          gh release create "$TAG" release-artifacts/* \
-            --title "SiKomputer $TAG" \
-            --generate-notes
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-artifacts/* --clobber
+          else
+            gh release create "$TAG" release-artifacts/* \
+              --title "SiKomputer $TAG" \
+              --generate-notes
+          fi
