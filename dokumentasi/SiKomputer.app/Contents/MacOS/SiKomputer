@@ -1,0 +1,80 @@
+#!/bin/bash
+# SiKomputer Native Desktop App Launcher for macOS
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+WEB_DIR="$DIR/Resources/web"
+
+# Cari port bebas antara 58300 - 58350
+PORT=58300
+while lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; do
+    PORT=$((PORT+1))
+done
+
+# Jalankan mini Threading HTTP server lokal dengan MIME lengkap & SPA client-side routing
+python3 -c "
+import http.server
+import socketserver
+import os
+
+PORT = $PORT
+DIRECTORY = '$WEB_DIR'
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.mjs': 'application/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.ico': 'image/x-icon',
+        '.jpg': 'image/jpeg',
+        '.woff2': 'font/woff2',
+        '.wasm': 'application/wasm',
+        '.json': 'application/json',
+        '.webmanifest': 'application/json',
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DIRECTORY, **kwargs)
+
+    def end_headers(self):
+        if self.path in ('/', '/index.html', '/sw.js'):
+            self.send_header('Cache-Control', 'no-cache, must-revalidate')
+        super().end_headers()
+
+    def do_GET(self):
+        path = self.translate_path(self.path)
+        if not os.path.exists(path) or os.path.isdir(path):
+            if not os.path.exists(os.path.join(path, 'index.html')):
+                self.path = '/index.html'
+        return super().do_GET()
+
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+with socketserver.ThreadingTCPServer(('127.0.0.1', PORT), Handler) as httpd:
+    httpd.serve_forever()
+" &
+SERVER_PID=$!
+
+APP_URL="http://127.0.0.1:$PORT/"
+
+# Tunggu server siap
+sleep 0.8
+
+# Buka aplikasi dalam mode jendela mandiri (Native App Mode tanpa URL bar)
+PROFILE_DIR="$HOME/Library/Application Support/SiKomputer-Profile"
+mkdir -p "$PROFILE_DIR"
+
+if [ -d "/Applications/Google Chrome.app" ]; then
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --app="$APP_URL" --user-data-dir="$PROFILE_DIR" --window-size=1400,900
+elif [ -d "/Applications/Microsoft Edge.app" ]; then
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" --app="$APP_URL" --user-data-dir="$PROFILE_DIR" --window-size=1400,900
+elif [ -d "/Applications/Brave Browser.app" ]; then
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" --app="$APP_URL" --user-data-dir="$PROFILE_DIR" --window-size=1400,900
+else
+    open "$APP_URL"
+    wait $SERVER_PID
+fi
+
+# Matikan server lokal saat jendela aplikasi ditutup
+kill $SERVER_PID 2>/dev/null

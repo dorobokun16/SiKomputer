@@ -1,0 +1,163 @@
+#!/bin/bash
+# SiKomputer Native Desktop App Launcher for macOS (Offline + GitHub Self-Update Support)
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
+BUNDLED_WEB="$DIR/Resources/web"
+WEB_DIR="$HOME/Library/Application Support/SiKomputer-Standalone/web"
+mkdir -p "$WEB_DIR"
+
+# Sinkronkan aset web bawaan jika folder lokal kosong atau versi bawaan >= versi terpasang
+python3 - "$BUNDLED_WEB" "$WEB_DIR" << 'PY_SYNC'
+import sys, os, json, shutil
+
+bundled, local = sys.argv[1], sys.argv[2]
+def read_code(folder):
+    try:
+        with open(os.path.join(folder, "version.json"), "r", encoding="utf-8") as f:
+            return int(json.load(f).get("versionCode", 0))
+    except Exception:
+        return 0
+
+if os.path.isdir(bundled):
+    has_index = os.path.exists(os.path.join(local, "index.html"))
+    if (not has_index) or (read_code(bundled) >= read_code(local)):
+        shutil.copytree(bundled, local, dirs_exist_ok=True)
+PY_SYNC
+
+# Cari port bebas antara 58300 - 58350
+PORT=58300
+while lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1 ; do
+    PORT=$((PORT+1))
+done
+
+# Jalankan mini Threading HTTP server lokal dengan MIME lengkap, SPA routing & updater endpoint
+python3 -c "
+import http.server
+import socketserver
+import os
+import json
+import tempfile
+import shutil
+import zipfile
+import urllib.request
+import urllib.parse
+
+PORT = $PORT
+DIRECTORY = '$WEB_DIR'
+
+def is_allowed_github_url(raw):
+    try:
+        p = urllib.parse.urlparse(raw)
+        if p.scheme != 'https':
+            return False
+        host = p.netloc.lower()
+        return host in ('github.com', 'dorobokun16.github.io', 'raw.githubusercontent.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com') or host.endswith('.githubusercontent.com')
+    except Exception:
+        return False
+
+def read_version_meta():
+    try:
+        with open(os.path.join(DIRECTORY, 'version.json'), 'r', encoding='utf-8') as f:
+            d = json.load(f)
+            return str(d.get('version', '1.1.0')), int(d.get('versionCode', 2))
+    except Exception:
+        return '1.1.0', 2
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        '.html': 'text/html; charset=utf-8',
+        '.js': 'application/javascript; charset=utf-8',
+        '.mjs': 'application/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8',
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.ico': 'image/x-icon',
+        '.jpg': 'image/jpeg',
+        '.woff2': 'font/woff2',
+        '.wasm': 'application/wasm',
+        '.json': 'application/json',
+        '.webmanifest': 'application/json',
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DIRECTORY, **kwargs)
+
+    def end_headers(self):
+        if self.path in ('/', '/index.html', '/sw.js', '/version.json') or self.path.startswith('/__launcher/'):
+            self.send_header('Cache-Control', 'no-store, must-revalidate')
+        super().end_headers()
+
+    def write_json(self, code, payload):
+        raw = json.dumps(payload).encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        if self.path == '/__launcher/info':
+            ver, code = read_version_meta()
+            self.write_json(200, {'platform': 'macos-app', 'canSelfUpdateWeb': True, 'webVersion': ver, 'webVersionCode': code})
+            return
+        path = self.translate_path(self.path)
+        if not os.path.exists(path) or os.path.isdir(path):
+            if not os.path.exists(os.path.join(path, 'index.html')):
+                self.path = '/index.html'
+        return super().do_GET()
+
+    def do_POST(self):
+        if self.path != '/__launcher/apply-update':
+            self.send_response(404)
+            self.end_headers()
+            return
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            body = json.loads(self.rfile.read(length).decode('utf-8'))
+            bundle_url = body.get('webBundleUrl', '')
+            if not is_allowed_github_url(bundle_url):
+                self.write_json(400, {'ok': False, 'error': 'URL harus berasal dari domain GitHub resmi.'})
+                return
+            with tempfile.TemporaryDirectory() as tmp:
+                zip_path = os.path.join(tmp, 'update.zip')
+                stage_dir = os.path.join(tmp, 'stage')
+                req = urllib.request.Request(bundle_url, headers={'User-Agent': 'SiKomputer-macOS-Updater'})
+                with urllib.request.urlopen(req, timeout=45) as resp, open(zip_path, 'wb') as out:
+                    shutil.copyfileobj(resp, out)
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    if 'index.html' not in zf.namelist():
+                        raise RuntimeError('Paket zip tidak berisi index.html yang valid.')
+                    zf.extractall(stage_dir)
+                shutil.copytree(stage_dir, DIRECTORY, dirs_exist_ok=True)
+            self.write_json(200, {'ok': True, 'updated': True})
+        except Exception as e:
+            self.write_json(500, {'ok': False, 'error': str(e)})
+
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+with socketserver.ThreadingTCPServer(('127.0.0.1', PORT), Handler) as httpd:
+    httpd.serve_forever()
+" &
+SERVER_PID=$!
+
+APP_URL="http://127.0.0.1:$PORT/"
+
+# Tunggu server siap
+sleep 0.8
+
+# Buka aplikasi dalam mode jendela mandiri (Native App Mode tanpa URL bar)
+PROFILE_DIR="$HOME/Library/Application Support/SiKomputer-Profile"
+mkdir -p "$PROFILE_DIR"
+
+if [ -d "/Applications/Google Chrome.app" ]; then
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --app="$APP_URL" --user-data-dir="$PROFILE_DIR" --window-size=1400,900
+elif [ -d "/Applications/Microsoft Edge.app" ]; then
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" --app="$APP_URL" --user-data-dir="$PROFILE_DIR" --window-size=1400,900
+elif [ -d "/Applications/Brave Browser.app" ]; then
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" --app="$APP_URL" --user-data-dir="$PROFILE_DIR" --window-size=1400,900
+else
+    open "$APP_URL"
+    wait $SERVER_PID
+fi
+
+# Matikan server lokal saat jendela aplikasi ditutup
+kill $SERVER_PID 2>/dev/null
