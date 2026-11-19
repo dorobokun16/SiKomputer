@@ -186,11 +186,7 @@ namespace SiKomputer
                             string dir = Path.GetDirectoryName(destPath);
                             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
-                            FileInfo fi = new FileInfo(destPath);
-                            if (!fi.Exists || fi.Length != entry.Length || Math.Abs((fi.LastWriteTimeUtc - entry.LastWriteTime.UtcDateTime).TotalSeconds) > 2)
-                            {
-                                entry.ExtractToFile(destPath, true);
-                            }
+                            entry.ExtractToFile(destPath, true);
                         }
                     }
                 }

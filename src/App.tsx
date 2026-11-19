@@ -18,8 +18,10 @@ import { TextStudioPage } from '@/pages/TextStudio'
 import { QrStudioPage } from '@/pages/QrStudio'
 import { NotesVaultPage } from '@/pages/NotesVault'
 import { DateCalculatorPage } from '@/pages/DateCalculator'
+import { NotepadWindowPage } from '@/pages/NotepadWindow'
 
 const router = createBrowserRouter([
+  { path: '/notepad-window', element: <NotepadWindowPage /> },
   {
     element: <AppShell />,
     children: [

@@ -1,19 +1,15 @@
 import {
   Copy,
   Check,
-  Download,
   Eye,
   EyeOff,
   ExternalLink,
   KeyRound,
   Lock,
   Maximize2,
-  Minimize2,
-  Minus,
   Plus,
   Pin,
   PinOff,
-  Save,
   Search,
   Trash2,
   Edit2,
@@ -22,10 +18,8 @@ import {
   Terminal,
   ShieldCheck,
   Globe,
-  X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { db, type NoteEntity } from '@/db/dexie'
 import {
@@ -39,84 +33,31 @@ import {
 } from '@/components/ui/primitives'
 import { Modal, Tabs, useToast } from '@/components/ui/overlays'
 import { PageHeader } from '@/components/ui/blocks'
+import {
+  broadcastNotesSync,
+  ensureNotesSeeded,
+  subscribeNotesSync,
+  useNotepadWindows,
+} from '@/components/notes/NotepadContext'
 import { cn } from '@/lib/cn'
 
 type CategoryFilter = 'all' | 'password' | 'endpoint' | 'env' | 'note'
 
-export interface NotepadWindowItem {
-  windowId: string
-  noteId: string
-  title: string
-  content: string
-  username: string
-  password: string
-  url: string
-  category: 'password' | 'endpoint' | 'env' | 'note'
-  isPinned: boolean
-  updatedAt: string
-  isDirty: boolean
-  size: 'floating' | 'normal' | 'large' | 'fullscreen'
-  minimized: boolean
-  zIndex: number
-  offsetX: number
-  offsetY: number
-  fontFamily: 'mono' | 'sans'
-  fontSize: 'sm' | 'base' | 'lg'
-  wordWrap: boolean
-  secretVisible: boolean
-  confirmCloseOpen: boolean
-}
-
-const sampleSeedNotes: Omit<NoteEntity, 'id'>[] = [
-  {
-    title: 'Kredensial Server Staging',
-    category: 'password',
-    username: 'admin@perusahaan.co.id',
-    password: 'P@ssw0rdStaging2026!',
-    url: 'https://staging.internal.corp',
-    content: 'Akun akses pengujian pipeline RPA dan dashboard monitoring.',
-    tags: ['staging', 'server', 'rpa'],
-    isPinned: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    title: 'Webhook Webhook Automation RPA',
-    category: 'endpoint',
-    url: 'https://api.internal.corp/v1/rpa/trigger-timesheet',
-    username: 'Bearer Token',
-    password: 'demo_token_rpa_webhook_2026',
-    content: 'POST endpoint untuk auto-create tugas & notifikasi bot Telegram.',
-    tags: ['api', 'webhook', 'automation'],
-    isPinned: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    title: 'DB Connection String .env',
-    category: 'env',
-    content: 'DATABASE_URL="postgresql://postgres:secret123@127.0.0.1:5432/sikomputer?schema=public"\nREDIS_HOST="127.0.0.1"\nREDIS_PORT=6379',
-    tags: ['env', 'database', 'local'],
-    isPinned: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-]
-
 export function NotesVaultPage() {
   const toast = useToast()
   const [searchParams, setSearchParams] = useSearchParams()
+  const { openNoteWindow, openFloatingNote, removeDeletedNoteWindows } = useNotepadWindows()
+
   const [notes, setNotes] = useState<NoteEntity[]>([])
   const [filterCat, setFilterCat] = useState<CategoryFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [unmaskedIds, setUnmaskedIds] = useState<Record<string, boolean>>({})
 
-  // Modal State
+  // Modal Tambah / Edit Metadata State
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingNote, setEditingNote] = useState<NoteEntity | null>(null)
 
-  // Form State
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState<'password' | 'endpoint' | 'env' | 'note'>('password')
   const [username, setUsername] = useState('')
@@ -126,32 +67,9 @@ export function NotesVaultPage() {
   const [tagsInput, setTagsInput] = useState('')
   const [isPinned, setIsPinned] = useState(false)
 
-  // Multi-Window Notepad State
-  const [openWindows, setOpenWindows] = useState<NotepadWindowItem[]>([])
-  const [activeWindowId, setActiveWindowId] = useState<string | null>(null)
-  const topZRef = useRef(82)
-  const dragRef = useRef<{
-    windowId: string
-    startX: number
-    startY: number
-    origX: number
-    origY: number
-  } | null>(null)
-
-  // Load Notes from Dexie
-  const loadNotes = async () => {
+  const loadNotes = useCallback(async () => {
     try {
-      let list = await db.notes.toArray()
-      if (list.length === 0 && !localStorage.getItem('sk-has-seeded')) {
-        // Seed initial demo notes
-        for (const s of sampleSeedNotes) {
-          await db.notes.add({
-            ...s,
-            id: 'note-' + Math.random().toString(36).slice(2, 9),
-          })
-        }
-        list = await db.notes.toArray()
-      }
+      const list = await ensureNotesSeeded()
       list.sort((a, b) => {
         if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1
         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -160,232 +78,45 @@ export function NotesVaultPage() {
     } catch {
       // ignore
     }
-  }
+  }, [])
 
   useEffect(() => {
     void loadNotes()
-  }, [])
+  }, [loadNotes])
 
-  // Auto-open catatan saat dibuka via popup browser ?openNote=<id>
+  // Real-time sinkronisasi antar-jendela (Window terpisah <-> Halaman Utama)
+  useEffect(() => {
+    const unsub = subscribeNotesSync(() => void loadNotes())
+    const onFocus = () => void loadNotes()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      unsub()
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [loadNotes])
+
+  // Kompatibilitas tautan lama ?openNote=<id>
   useEffect(() => {
     const targetId = searchParams.get('openNote')
     if (!targetId || notes.length === 0) return
     const target = notes.find((n) => n.id === targetId)
     if (target) {
-      handleOpenNotepad(target, 'fullscreen')
+      openFloatingNote(target, 'fullscreen')
       searchParams.delete('openNote')
       setSearchParams(searchParams, { replace: true })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notes, searchParams])
-
-  // Peringatan browser sebelum menutup tab/popup jika ada jendela catatan belum disimpan
-  useEffect(() => {
-    const hasDirty = openWindows.some((w) => w.isDirty)
-    if (!hasDirty) return
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      e.returnValue = ''
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [openWindows])
-
-  // Pointer drag listener untuk jendela mengambang
-  useEffect(() => {
-    const handleMove = (e: PointerEvent) => {
-      const drag = dragRef.current
-      if (!drag) return
-      const dx = e.clientX - drag.startX
-      const dy = e.clientY - drag.startY
-      setOpenWindows((prev) =>
-        prev.map((w) =>
-          w.windowId === drag.windowId
-            ? { ...w, offsetX: drag.origX + dx, offsetY: drag.origY + dy }
-            : w,
-        ),
-      )
-    }
-    const handleUp = () => {
-      dragRef.current = null
-    }
-    window.addEventListener('pointermove', handleMove)
-    window.addEventListener('pointerup', handleUp)
-    return () => {
-      window.removeEventListener('pointermove', handleMove)
-      window.removeEventListener('pointerup', handleUp)
-    }
-  }, [])
+  }, [notes, openFloatingNote, searchParams, setSearchParams])
 
   const handleCopy = (text: string, key: string, label = 'Teks') => {
-    navigator.clipboard.writeText(text)
+    void navigator.clipboard.writeText(text)
     setCopiedKey(key)
     toast({ title: `${label} Tersalin ke Clipboard`, tone: 'success' })
-    setTimeout(() => setCopiedKey(null), 2000)
+    window.setTimeout(() => setCopiedKey(null), 2000)
   }
 
   const toggleMask = (id: string) => {
     setUnmaskedIds((prev) => ({ ...prev, [id]: !prev[id] }))
   }
-
-  const nextTopZ = () => {
-    topZRef.current += 1
-    return topZRef.current
-  }
-
-  const updateWindow = (windowId: string, patch: Partial<NotepadWindowItem>) => {
-    setOpenWindows((prev) => prev.map((w) => (w.windowId === windowId ? { ...w, ...patch } : w)))
-  }
-
-  const focusWindow = (windowId: string) => {
-    const z = nextTopZ()
-    setActiveWindowId(windowId)
-    setOpenWindows((prev) =>
-      prev.map((w) => (w.windowId === windowId ? { ...w, minimized: false, zIndex: z } : w)),
-    )
-  }
-
-  // Notepad Multi-Window Controls
-  const handleOpenNotepad = (n: NoteEntity, initialSize: NotepadWindowItem['size'] = 'floating') => {
-    const existing = openWindows.find((w) => w.noteId === n.id)
-    if (existing) {
-      focusWindow(existing.windowId)
-      return
-    }
-    const z = nextTopZ()
-    const winId = 'np-' + Math.random().toString(36).slice(2, 9)
-    const cascadeStep = openWindows.length % 6
-    const newWin: NotepadWindowItem = {
-      windowId: winId,
-      noteId: n.id,
-      title: n.title,
-      content: n.content || '',
-      username: n.username || '',
-      password: n.password || '',
-      url: n.url || '',
-      category: n.category,
-      isPinned: n.isPinned,
-      updatedAt: n.updatedAt,
-      isDirty: false,
-      size: initialSize,
-      minimized: false,
-      zIndex: z,
-      offsetX: cascadeStep * 28,
-      offsetY: cascadeStep * 28,
-      fontFamily: 'mono',
-      fontSize: 'base',
-      wordWrap: true,
-      secretVisible: false,
-      confirmCloseOpen: false,
-    }
-    setOpenWindows((prev) => [...prev, newWin])
-    setActiveWindowId(winId)
-  }
-
-  const forceCloseWindow = (windowId: string) => {
-    setOpenWindows((prev) => {
-      const remaining = prev.filter((w) => w.windowId !== windowId)
-      if (activeWindowId === windowId) {
-        const nextTop = [...remaining].sort((a, b) => b.zIndex - a.zIndex)[0]
-        setActiveWindowId(nextTop ? nextTop.windowId : null)
-      }
-      return remaining
-    })
-  }
-
-  const requestCloseWindow = (windowId: string) => {
-    const win = openWindows.find((w) => w.windowId === windowId)
-    if (!win) return
-    if (!win.isDirty) {
-      forceCloseWindow(windowId)
-      return
-    }
-    const z = nextTopZ()
-    setActiveWindowId(windowId)
-    updateWindow(windowId, { confirmCloseOpen: true, minimized: false, zIndex: z })
-  }
-
-  const requestCloseAllWindows = () => {
-    const firstDirty = openWindows.find((w) => w.isDirty)
-    if (!firstDirty) {
-      setOpenWindows([])
-      setActiveWindowId(null)
-      return
-    }
-    requestCloseWindow(firstDirty.windowId)
-    toast({
-      title: 'Ada catatan yang belum disimpan',
-      description: 'Konfirmasi Simpan atau Jangan Simpan sebelum menutup semua jendela.',
-      tone: 'warning',
-    })
-  }
-
-  const handleSaveWindow = async (windowId: string, closeAfterSave = false) => {
-    const win = openWindows.find((w) => w.windowId === windowId)
-    if (!win) return
-    try {
-      const now = new Date().toISOString()
-      await db.notes.update(win.noteId, {
-        title: win.title.trim() || 'Catatan Tanpa Judul',
-        content: win.content,
-        username: win.username.trim() || undefined,
-        password: win.password || undefined,
-        url: win.url.trim() || undefined,
-        category: win.category,
-        isPinned: win.isPinned,
-        updatedAt: now,
-      })
-      toast({ title: 'Catatan Berhasil Disimpan', tone: 'success' })
-      await loadNotes()
-      if (closeAfterSave) {
-        forceCloseWindow(windowId)
-      } else {
-        updateWindow(windowId, { isDirty: false, confirmCloseOpen: false, updatedAt: now })
-      }
-    } catch {
-      toast({ title: 'Gagal Menyimpan Catatan', tone: 'danger' })
-    }
-  }
-
-  const handleDownloadWindow = (win: NotepadWindowItem) => {
-    const safeTitle = (win.title || 'catatan').toLowerCase().replace(/[^a-z0-9_-]/gi, '_')
-    const filename = `${safeTitle}.txt`
-    const blob = new Blob([win.content], { type: 'text/plain;charset=utf-8' })
-    const fileUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = fileUrl
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(fileUrl)
-    toast({ title: `File ${filename} berhasil diunduh`, tone: 'success' })
-  }
-
-  const handleOpenInBrowserPopup = (win: NotepadWindowItem) => {
-    const targetUrl = `${window.location.origin}${import.meta.env.BASE_URL}productivity/notes?openNote=${encodeURIComponent(win.noteId)}`
-    window.open(targetUrl, `sikomputer_note_${win.noteId}`, 'popup=yes,width=980,height=720,resizable=yes,scrollbars=yes')
-  }
-
-  // Keyboard shortcut Ctrl+S / Cmd+S & Escape untuk jendela Notepad aktif
-  useEffect(() => {
-    if (openWindows.length === 0 || !activeWindowId) return
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const win = openWindows.find((w) => w.windowId === activeWindowId)
-      if (!win || win.minimized) return
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault()
-        void handleSaveWindow(win.windowId, false)
-      } else if (e.key === 'Escape') {
-        if (win.confirmCloseOpen) {
-          updateWindow(win.windowId, { confirmCloseOpen: false })
-        } else {
-          requestCloseWindow(win.windowId)
-        }
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openWindows, activeWindowId])
 
   const handleOpenCreate = () => {
     setEditingNote(null)
@@ -459,6 +190,7 @@ export function NotesVaultPage() {
         toast({ title: 'Catatan Baru Disimpan', tone: 'success' })
       }
       setIsModalOpen(false)
+      broadcastNotesSync()
       await loadNotes()
     } catch {
       toast({ title: 'Gagal Menyimpan', tone: 'danger' })
@@ -468,6 +200,8 @@ export function NotesVaultPage() {
   const handleDelete = async (id: string) => {
     try {
       await db.notes.delete(id)
+      removeDeletedNoteWindows(id)
+      broadcastNotesSync()
       toast({ title: 'Catatan Dihapus', tone: 'info' })
       await loadNotes()
     } catch {
@@ -478,13 +212,13 @@ export function NotesVaultPage() {
   const handleTogglePin = async (n: NoteEntity) => {
     try {
       await db.notes.update(n.id, { isPinned: !n.isPinned, updatedAt: new Date().toISOString() })
+      broadcastNotesSync()
       await loadNotes()
     } catch {
       // ignore
     }
   }
 
-  // Filter Notes
   const filteredNotes = useMemo(() => {
     return notes.filter((n) => {
       if (filterCat !== 'all' && n.category !== filterCat) return false
@@ -504,7 +238,7 @@ export function NotesVaultPage() {
     <div className="space-y-6">
       <PageHeader
         title="Catatan & Kredensial"
-        description="Simpan password, token API, endpoint URL, dan konfigurasi rahasia. 100% tersimpan privat di database lokal browser."
+        description="Simpan password, token API, endpoint URL, dan konfigurasi rahasia. Klik catatan untuk membukanya di window baru yang terpisah sehingga Anda bebas mengakses fitur lain secara bersamaan."
         icon={<Lock className="size-5" />}
         color="var(--mod-productivity)"
         actions={
@@ -566,10 +300,10 @@ export function NotesVaultPage() {
             return (
               <Card
                 key={n.id}
-                onClick={() => handleOpenNotepad(n)}
+                onClick={() => openNoteWindow(n, 'popup')}
                 className={cn(
                   'group flex flex-col justify-between cursor-pointer transition-all hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-md select-none',
-                  n.isPinned && 'border-primary/40 bg-gradient-to-b from-primary/5 to-surface'
+                  n.isPinned && 'border-primary/40 bg-gradient-to-b from-primary/5 to-surface',
                 )}
               >
                 <div>
@@ -581,7 +315,10 @@ export function NotesVaultPage() {
                         {n.category === 'endpoint' && <Server className="size-4 text-blue-500 shrink-0" />}
                         {n.category === 'env' && <Terminal className="size-4 text-emerald-500 shrink-0" />}
                         {n.category === 'note' && <FileText className="size-4 text-purple-500 shrink-0" />}
-                        <h4 className="truncate text-sm font-bold text-foreground group-hover:text-primary transition-colors" title={n.title}>
+                        <h4
+                          className="truncate text-sm font-bold text-foreground group-hover:text-primary transition-colors"
+                          title={n.title}
+                        >
                           {n.title}
                         </h4>
                       </div>
@@ -595,32 +332,44 @@ export function NotesVaultPage() {
 
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <button
-                        onClick={() => handleOpenNotepad(n)}
-                        className="p-1 rounded text-muted hover:text-primary hover:bg-surface-2 transition-colors"
-                        title="Buka di Notepad Lebar / Layar Penuh"
+                        type="button"
+                        onClick={() => openNoteWindow(n, 'popup')}
+                        className="p-1 rounded text-muted hover:text-primary hover:bg-surface-2 transition-colors cursor-pointer"
+                        title="Buka di Window Baru (Terpisah)"
+                      >
+                        <ExternalLink className="size-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openNoteWindow(n, 'floating')}
+                        className="p-1 rounded text-muted hover:text-primary hover:bg-surface-2 transition-colors cursor-pointer"
+                        title="Buka Jendela Mengambang di Aplikasi (Tetap Muncul Saat Pindah Menu)"
                       >
                         <Maximize2 className="size-3.5" />
                       </button>
                       <button
-                        onClick={() => handleTogglePin(n)}
+                        type="button"
+                        onClick={() => void handleTogglePin(n)}
                         className={cn(
-                          'p-1 rounded hover:bg-surface-2 transition-colors',
-                          n.isPinned ? 'text-primary' : 'text-muted/60 hover:text-foreground'
+                          'p-1 rounded hover:bg-surface-2 transition-colors cursor-pointer',
+                          n.isPinned ? 'text-primary' : 'text-muted/60 hover:text-foreground',
                         )}
                         title={n.isPinned ? 'Lepas Pin' : 'Pin ke Atas'}
                       >
                         {n.isPinned ? <Pin className="size-4" /> : <PinOff className="size-4" />}
                       </button>
                       <button
+                        type="button"
                         onClick={() => handleOpenEdit(n)}
-                        className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-2 transition-colors"
+                        className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-2 transition-colors cursor-pointer"
                         title="Edit Metadata"
                       >
                         <Edit2 className="size-3.5" />
                       </button>
                       <button
-                        onClick={() => handleDelete(n.id)}
-                        className="p-1 rounded text-muted hover:text-danger hover:bg-surface-2 transition-colors"
+                        type="button"
+                        onClick={() => void handleDelete(n.id)}
+                        className="p-1 rounded text-muted hover:text-danger hover:bg-surface-2 transition-colors cursor-pointer"
                         title="Hapus"
                       >
                         <Trash2 className="size-3.5" />
@@ -630,17 +379,23 @@ export function NotesVaultPage() {
 
                   {/* Body Details */}
                   <div className="space-y-2 p-4 pt-1 text-xs">
-                    {/* URL */}
                     {n.url && (
-                      <div className="flex items-center justify-between rounded border border-border bg-surface-2/40 px-2.5 py-1.5" onClick={(e) => e.stopPropagation()}>
-                        <span className="flex items-center gap-1.5 truncate text-muted font-mono text-[11px] max-w-[200px]" title={n.url}>
+                      <div
+                        className="flex items-center justify-between rounded border border-border bg-surface-2/40 px-2.5 py-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <span
+                          className="flex items-center gap-1.5 truncate text-muted font-mono text-[11px] max-w-[200px]"
+                          title={n.url}
+                        >
                           <Globe className="size-3 shrink-0 text-primary" />
                           {n.url}
                         </span>
                         <div className="flex items-center gap-1">
                           <button
+                            type="button"
                             onClick={() => handleCopy(n.url!, `url-${n.id}`, 'URL')}
-                            className="p-1 rounded hover:text-foreground text-muted"
+                            className="p-1 rounded hover:text-foreground text-muted cursor-pointer"
                             title="Salin URL"
                           >
                             {copiedKey === `url-${n.id}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
@@ -658,15 +413,18 @@ export function NotesVaultPage() {
                       </div>
                     )}
 
-                    {/* Username */}
                     {n.username && (
-                      <div className="flex items-center justify-between rounded border border-border bg-surface-2/40 px-2.5 py-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div
+                        className="flex items-center justify-between rounded border border-border bg-surface-2/40 px-2.5 py-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <span className="text-[11px] text-muted">User/Key:</span>
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono text-[11px] font-medium text-foreground">{n.username}</span>
                           <button
+                            type="button"
                             onClick={() => handleCopy(n.username!, `usr-${n.id}`, 'Username')}
-                            className="p-1 rounded hover:text-foreground text-muted"
+                            className="p-1 rounded hover:text-foreground text-muted cursor-pointer"
                             title="Salin Username"
                           >
                             {copiedKey === `usr-${n.id}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
@@ -675,24 +433,28 @@ export function NotesVaultPage() {
                       </div>
                     )}
 
-                    {/* Password / Secret */}
                     {n.password && (
-                      <div className="flex items-center justify-between rounded border border-border bg-surface-2/40 px-2.5 py-1.5" onClick={(e) => e.stopPropagation()}>
+                      <div
+                        className="flex items-center justify-between rounded border border-border bg-surface-2/40 px-2.5 py-1.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <span className="text-[11px] text-muted">Secret:</span>
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono text-[11px] font-semibold tracking-wider text-foreground">
                             {isUnmasked ? n.password : '••••••••••••'}
                           </span>
                           <button
+                            type="button"
                             onClick={() => toggleMask(n.id)}
-                            className="p-1 rounded hover:text-foreground text-muted"
+                            className="p-1 rounded hover:text-foreground text-muted cursor-pointer"
                             title={isUnmasked ? 'Sembunyikan' : 'Tampilkan'}
                           >
                             {isUnmasked ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleCopy(n.password!, `pwd-${n.id}`, 'Password / Secret')}
-                            className="p-1 rounded hover:text-foreground text-muted"
+                            className="p-1 rounded hover:text-foreground text-muted cursor-pointer"
                             title="Salin Password"
                           >
                             {copiedKey === `pwd-${n.id}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
@@ -701,14 +463,13 @@ export function NotesVaultPage() {
                       </div>
                     )}
 
-                    {/* Content / Memo */}
                     {n.content && (
                       <div className="overflow-hidden rounded border border-border bg-surface-2/30 transition-colors group-hover:border-primary/40">
                         <div className="max-h-28 overflow-hidden p-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted">
                           {n.content}
                         </div>
                         <div className="border-t border-border/50 bg-surface-2/40 px-2.5 py-1 text-center text-[10px] font-medium text-primary">
-                          Klik kartu untuk membuka di Notepad ↗
+                          Klik kartu untuk membuka di Window Baru ↗
                         </div>
                       </div>
                     )}
@@ -726,8 +487,8 @@ export function NotesVaultPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-primary font-medium flex items-center gap-1 group-hover:underline">
-                      <FileText className="size-3" />
-                      Notepad
+                      <ExternalLink className="size-3" />
+                      Window Baru
                     </span>
                     <span>
                       {new Date(n.updatedAt).toLocaleDateString('id-ID', {
@@ -743,7 +504,7 @@ export function NotesVaultPage() {
         </div>
       )}
 
-      {/* Modal Tambah / Edit Catatan */}
+      {/* Modal Tambah / Edit Metadata Catatan */}
       <Modal
         open={isModalOpen}
         onClose={() => setIsModalOpen(false)}
@@ -756,7 +517,7 @@ export function NotesVaultPage() {
               onChange={(e) => setCategory(e.target.value as 'password' | 'endpoint' | 'env' | 'note')}
             >
               <option value="password">Password / Akun Login</option>
-              <option value="endpoint">Endpoint API & Webhook</option>
+              <option value="endpoint">Endpoint API &amp; Webhook</option>
               <option value="env">Variabel Lingkungan (.env)</option>
               <option value="note">Catatan Bebas / Memo</option>
             </Select>
@@ -842,450 +603,6 @@ export function NotesVaultPage() {
           </div>
         </form>
       </Modal>
-
-      {/* ===============================================================
-          MULTI-WINDOW NOTEPAD PORTAL + TASKBAR DOCK
-          =============================================================== */}
-      {openWindows.length > 0 && createPortal(
-        <>
-          {openWindows.map((win) => {
-            if (win.minimized) return null
-            const isActive = activeWindowId === win.windowId
-            const isFullscreen = win.size === 'fullscreen'
-            const isFloating = win.size === 'floating'
-
-            return (
-              <div
-                key={win.windowId}
-                data-notepad-window={win.windowId}
-                data-note-id={win.noteId}
-                style={{ zIndex: win.zIndex }}
-                onPointerDown={() => focusWindow(win.windowId)}
-                className={cn(
-                  'fixed inset-0 pointer-events-none flex items-center justify-center',
-                  isFullscreen ? 'p-0' : 'p-2 sm:p-4',
-                )}
-              >
-                <div
-                  style={
-                    isFloating
-                      ? { transform: `translate3d(${win.offsetX}px, ${win.offsetY}px, 0)` }
-                      : undefined
-                  }
-                  className={cn(
-                    'pointer-events-auto relative flex flex-col bg-surface border shadow-2xl overflow-hidden transition-shadow',
-                    isActive ? 'border-primary/70 ring-1 ring-primary/30' : 'border-border opacity-95',
-                    isFullscreen
-                      ? 'w-screen h-dvh rounded-none'
-                      : win.size === 'large'
-                        ? 'w-full max-w-5xl h-[88dvh] sm:h-[84vh] rounded-xl'
-                        : win.size === 'normal'
-                          ? 'w-full max-w-3xl h-[80dvh] sm:h-[75vh] rounded-xl'
-                          : 'w-full sm:w-[760px] h-[84dvh] sm:h-[70vh] rounded-xl sm:resize sm:min-w-[380px] sm:min-h-[340px] max-w-[96vw] max-h-[86dvh]',
-                  )}
-                >
-                  {/* Title Bar (Draggable saat Mengambang) */}
-                  <div
-                    onPointerDown={(e) => {
-                      if (!isFloating) return
-                      const tag = (e.target as HTMLElement).tagName
-                      if (tag === 'INPUT' || tag === 'BUTTON' || (e.target as HTMLElement).closest('button')) {
-                        return
-                      }
-                      dragRef.current = {
-                        windowId: win.windowId,
-                        startX: e.clientX,
-                        startY: e.clientY,
-                        origX: win.offsetX,
-                        origY: win.offsetY,
-                      }
-                    }}
-                    className={cn(
-                      'flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/80 px-3 py-2 sm:px-4 select-none',
-                      isFloating ? 'sm:cursor-move' : '',
-                    )}
-                  >
-                    <div className="flex items-center gap-2 min-w-0 flex-1 mr-1">
-                      {win.category === 'password' && <KeyRound className="size-4 text-amber-500 shrink-0" />}
-                      {win.category === 'endpoint' && <Server className="size-4 text-blue-500 shrink-0" />}
-                      {win.category === 'env' && <Terminal className="size-4 text-emerald-500 shrink-0" />}
-                      {win.category === 'note' && <FileText className="size-4 text-purple-500 shrink-0" />}
-
-                      <input
-                        type="text"
-                        value={win.title}
-                        onChange={(e) => updateWindow(win.windowId, { title: e.target.value, isDirty: true })}
-                        placeholder="Judul Catatan..."
-                        className="bg-transparent font-semibold text-sm sm:text-base text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary rounded px-1.5 py-0.5 truncate min-w-0 flex-1"
-                      />
-
-                      {win.isDirty ? (
-                        <Badge tone="warning" className="text-[10px] shrink-0">
-                          Belum Disimpan
-                        </Badge>
-                      ) : (
-                        <Badge tone="success" className="text-[10px] shrink-0">
-                          Tersimpan
-                        </Badge>
-                      )}
-                    </div>
-
-                    {/* Window Controls */}
-                    <div className="flex items-center gap-1 shrink-0">
-                      <div className="flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs text-muted">
-                        <button
-                          type="button"
-                          onClick={() => updateWindow(win.windowId, { size: 'floating' })}
-                          className={cn(
-                            'hidden sm:inline-block px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer',
-                            win.size === 'floating' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground',
-                          )}
-                          title="Jendela Mengambang Multi-Window"
-                        >
-                          Jendela
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => updateWindow(win.windowId, { size: 'large' })}
-                          className={cn(
-                            'hidden sm:inline-block px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer',
-                            win.size === 'large' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground',
-                          )}
-                          title="Jendela Lebar"
-                        >
-                          Lebar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateWindow(win.windowId, {
-                              size: win.size === 'fullscreen' ? 'floating' : 'fullscreen',
-                            })
-                          }
-                          className={cn(
-                            'px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer',
-                            win.size === 'fullscreen' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground',
-                          )}
-                          title={win.size === 'fullscreen' ? 'Kecilkan Jendela' : 'Layar Penuh'}
-                        >
-                          {win.size === 'fullscreen' ? (
-                            <>
-                              <Minimize2 className="size-3" /> Kecilkan
-                            </>
-                          ) : (
-                            <>
-                              <Maximize2 className="size-3" /> Full
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleOpenInBrowserPopup(win)}
-                        className="hidden sm:inline-flex rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-primary transition-colors cursor-pointer"
-                        title="Buka di Jendela Browser Terpisah"
-                      >
-                        <ExternalLink className="size-3.5" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => updateWindow(win.windowId, { minimized: true })}
-                        className="rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-foreground transition-colors cursor-pointer"
-                        title="Ciutkan ke Bilah Bawah"
-                      >
-                        <Minus className="size-4" />
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => requestCloseWindow(win.windowId)}
-                        className="rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-danger transition-colors cursor-pointer"
-                        title="Tutup Notepad (Esc)"
-                        aria-label={`Tutup ${win.title}`}
-                      >
-                        <X className="size-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Credential Quick Bar */}
-                  {(win.url || win.username || win.password) && (
-                    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2/30 px-4 py-2 text-xs">
-                      {win.url && (
-                        <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
-                          <Globe className="size-3.5 text-primary shrink-0" />
-                          <span className="font-mono text-[11px] text-muted max-w-[200px] truncate" title={win.url}>
-                            {win.url}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(win.url, `np-url-${win.windowId}`, 'URL')}
-                            className="p-0.5 text-muted hover:text-foreground"
-                            title="Salin URL"
-                          >
-                            {copiedKey === `np-url-${win.windowId}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-                          </button>
-                          <a
-                            href={win.url.startsWith('http') ? win.url : `https://${win.url}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="p-0.5 text-muted hover:text-foreground"
-                            title="Buka Website"
-                          >
-                            <ExternalLink className="size-3" />
-                          </a>
-                        </div>
-                      )}
-
-                      {win.username && (
-                        <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
-                          <span className="text-[11px] text-muted">User:</span>
-                          <span className="font-mono font-medium text-[11px] text-foreground">{win.username}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(win.username, `np-user-${win.windowId}`, 'Username')}
-                            className="p-0.5 text-muted hover:text-foreground"
-                            title="Salin Username"
-                          >
-                            {copiedKey === `np-user-${win.windowId}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-                          </button>
-                        </div>
-                      )}
-
-                      {win.password && (
-                        <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
-                          <span className="text-[11px] text-muted">Secret:</span>
-                          <span className="font-mono font-semibold tracking-wider text-[11px] text-foreground">
-                            {win.secretVisible ? win.password : '••••••••••••'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => updateWindow(win.windowId, { secretVisible: !win.secretVisible })}
-                            className="p-0.5 text-muted hover:text-foreground"
-                            title={win.secretVisible ? 'Sembunyikan' : 'Tampilkan'}
-                          >
-                            {win.secretVisible ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(win.password, `np-pass-${win.windowId}`, 'Password')}
-                            className="p-0.5 text-muted hover:text-foreground"
-                            title="Salin Password"
-                          >
-                            {copiedKey === `np-pass-${win.windowId}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Editor Toolbar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/20 px-3 py-2 text-xs sm:px-4">
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          updateWindow(win.windowId, { fontFamily: win.fontFamily === 'mono' ? 'sans' : 'mono' })
-                        }
-                        className={cn(
-                          'rounded border border-border px-2.5 py-1 font-mono text-[11px] transition-colors cursor-pointer',
-                          win.fontFamily === 'mono' ? 'bg-primary/10 text-primary border-primary/40' : 'bg-surface text-muted hover:text-foreground',
-                        )}
-                      >
-                        {win.fontFamily === 'mono' ? 'Monospace (Code)' : 'Sans-Serif (Text)'}
-                      </button>
-
-                      <div className="flex items-center rounded border border-border bg-surface text-[11px]">
-                        {(['sm', 'base', 'lg'] as const).map((sz, i) => (
-                          <button
-                            key={sz}
-                            type="button"
-                            onClick={() => updateWindow(win.windowId, { fontSize: sz })}
-                            className={cn(
-                              'px-2 py-1 transition-colors cursor-pointer',
-                              i === 0 && 'rounded-l',
-                              i === 2 && 'rounded-r',
-                              win.fontSize === sz ? 'bg-primary text-white' : 'text-muted hover:text-foreground',
-                            )}
-                          >
-                            {sz === 'sm' ? 'A-' : sz === 'lg' ? 'A+' : 'A'}
-                          </button>
-                        ))}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => updateWindow(win.windowId, { wordWrap: !win.wordWrap })}
-                        className={cn(
-                          'rounded border border-border px-2 py-1 text-[11px] transition-colors cursor-pointer',
-                          win.wordWrap ? 'bg-primary/10 text-primary border-primary/40' : 'bg-surface text-muted hover:text-foreground',
-                        )}
-                      >
-                        {win.wordWrap ? 'Wrap: On' : 'Wrap: Off'}
-                      </button>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                      <Button
-                        variant="ghost"
-                        className="h-7 text-xs px-2"
-                        onClick={() => {
-                          navigator.clipboard.writeText(win.content)
-                          toast({ title: 'Seluruh teks catatan tersalin!', tone: 'success' })
-                        }}
-                      >
-                        <Copy className="mr-1 size-3" />
-                        Salin
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="h-7 text-xs px-2"
-                        onClick={() => handleDownloadWindow(win)}
-                      >
-                        <Download className="mr-1 size-3" />
-                        .txt
-                      </Button>
-                      <Button
-                        variant="primary"
-                        className="h-7 text-xs px-2.5 sm:px-3 shadow-xs"
-                        onClick={() => void handleSaveWindow(win.windowId, false)}
-                      >
-                        <Save className="mr-1 size-3.5" />
-                        Simpan
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Main Textarea Canvas */}
-                  <div className="relative flex-1 bg-surface-2/10 overflow-hidden flex">
-                    <textarea
-                      value={win.content}
-                      onChange={(e) => updateWindow(win.windowId, { content: e.target.value, isDirty: true })}
-                      placeholder="Tuliskan catatan panjang, kredensial, konfigurasi .env, endpoint API, atau dokumentasi di sini... (Gunakan Ctrl+S untuk menyimpan instan)"
-                      className={cn(
-                        'w-full h-full p-4 sm:p-5 bg-transparent text-foreground resize-none focus:outline-hidden border-none overflow-y-auto leading-relaxed',
-                        win.fontFamily === 'mono' ? 'font-mono' : 'font-sans',
-                        win.fontSize === 'sm' ? 'text-xs' : win.fontSize === 'lg' ? 'text-base' : 'text-sm',
-                        win.wordWrap ? 'whitespace-pre-wrap' : 'whitespace-pre overflow-x-auto',
-                      )}
-                      autoFocus={isActive}
-                      spellCheck={false}
-                    />
-                  </div>
-
-                  {/* Notepad Status Bar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface-2/50 px-3 py-1.5 text-[11px] text-muted select-none sm:px-4">
-                    <div className="flex items-center gap-3">
-                      <span>Baris: {win.content.split('\n').length}</span>
-                      <span>Kata: {win.content.trim() ? win.content.trim().split(/\s+/).length : 0}</span>
-                      <span>Karakter: {win.content.length}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="hidden sm:inline-block">
-                        Pintasan: <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">Ctrl+S</kbd> Simpan · <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">Esc</kbd> Tutup
-                      </span>
-                      <span>
-                        Diperbarui: {new Date(win.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Dialog Konfirmasi Unsaved Changes saat Menutup Jendela */}
-                  {win.confirmCloseOpen && (
-                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 backdrop-blur-xs p-4">
-                      <div className="w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl space-y-4">
-                        <div className="space-y-1.5">
-                          <h4 className="text-base font-bold text-foreground">
-                            Simpan perubahan pada &quot;{win.title || 'Catatan'}&quot;?
-                          </h4>
-                          <p className="text-xs text-muted leading-relaxed">
-                            Catatan ini telah diubah dan belum disimpan. Pilih tindakan sebelum menutup jendela:
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap justify-end gap-2 pt-1">
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => updateWindow(win.windowId, { confirmCloseOpen: false })}
-                          >
-                            Batal
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="danger"
-                            onClick={() => forceCloseWindow(win.windowId)}
-                          >
-                            Jangan Simpan
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="primary"
-                            onClick={() => void handleSaveWindow(win.windowId, true)}
-                          >
-                            Simpan
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-
-          {/* Multi-Window Dock Bar di Bagian Bawah */}
-          <div className="fixed bottom-14 sm:bottom-3 left-2 right-2 z-[95] pointer-events-none flex justify-center">
-            <div className="pointer-events-auto flex max-w-full items-center gap-1.5 overflow-x-auto rounded-xl border border-border bg-surface/95 px-2.5 py-1.5 shadow-xl backdrop-blur-md">
-              <span className="hidden sm:inline-block px-1.5 text-[11px] font-semibold text-muted whitespace-nowrap">
-                Jendela ({openWindows.length}):
-              </span>
-              {openWindows.map((w) => {
-                const isActive = activeWindowId === w.windowId && !w.minimized
-                return (
-                  <div
-                    key={w.windowId}
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors shrink-0',
-                      isActive
-                        ? 'border-primary/60 bg-primary/15 text-primary font-semibold'
-                        : 'border-border bg-surface-2/60 text-muted hover:text-foreground',
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => focusWindow(w.windowId)}
-                      className="inline-flex items-center gap-1.5 max-w-[140px] truncate cursor-pointer"
-                    >
-                      {w.isDirty && <span className="size-2 rounded-full bg-amber-500 shrink-0" title="Belum disimpan" />}
-                      <span className="truncate">{w.title || 'Catatan'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => requestCloseWindow(w.windowId)}
-                      className="rounded p-0.5 text-muted hover:text-danger cursor-pointer"
-                      title="Tutup tab catatan"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </div>
-                )
-              })}
-              {openWindows.length > 1 && (
-                <button
-                  type="button"
-                  onClick={requestCloseAllWindows}
-                  className="ml-1 rounded-lg border border-border/80 bg-surface-2/40 px-2 py-1 text-[11px] text-muted hover:text-danger whitespace-nowrap cursor-pointer"
-                >
-                  Tutup Semua
-                </button>
-              )}
-            </div>
-          </div>
-        </>,
-        document.body,
-      )}
     </div>
   )
 }

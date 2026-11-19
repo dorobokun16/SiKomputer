@@ -9,6 +9,7 @@ import { BottomNav, Sidebar } from './Navigation'
 import { CommandPalette, Header } from './Header'
 import { checkAndRunTaskSchedules, seedRpaDefaultSchedules } from '@/services/task-scheduler.service'
 import { checkDueReminders } from '@/services/notification.service'
+import { NotepadWindowProvider } from '@/components/notes/NotepadContext'
 
 function LoadingPage() {
   return (
@@ -92,17 +93,19 @@ export function AppShell() {
   }, [])
 
   return (
-    <div className="flex min-h-dvh w-full max-w-full overflow-x-clip">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} onSearch={() => setPalette(true)} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Header onSearch={() => setPalette(true)} />
-        <main key={loc.pathname} className="anim-fade-in mx-auto w-full min-w-0 max-w-[1440px] flex-1 px-3.5 pt-4 pb-24 sm:px-6 sm:pt-5 sm:pb-10">
-          <StateBoundary />
-        </main>
+    <NotepadWindowProvider>
+      <div className="flex min-h-dvh w-full max-w-full overflow-x-clip">
+        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} onSearch={() => setPalette(true)} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Header onSearch={() => setPalette(true)} />
+          <main key={loc.pathname} className="anim-fade-in mx-auto w-full min-w-0 max-w-[1440px] flex-1 px-3.5 pt-4 pb-24 sm:px-6 sm:pt-5 sm:pb-10">
+            <StateBoundary />
+          </main>
+        </div>
+        <BottomNav />
+        <CommandPalette open={palette} onClose={() => setPalette(false)} />
       </div>
-      <BottomNav />
-      <CommandPalette open={palette} onClose={() => setPalette(false)} />
-    </div>
+    </NotepadWindowProvider>
   )
 }
 

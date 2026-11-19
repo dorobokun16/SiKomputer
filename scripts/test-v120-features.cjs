@@ -272,7 +272,7 @@ async function runTests() {
     await page.screenshot({ path: path.join(ARTIFACT_DIR, 'v120-pdf-studio-merge.png') });
     console.log('   OK: Merge PDF 3+2 halaman menghasilkan dokumen-gabungan.pdf');
 
-    console.log('5. Verifikasi Catatan Multi-Window & Konfirmasi Tutup Unsaved...');
+    console.log('5A. Verifikasi Catatan Window Baru Terpisah (window.open) + Akses Fitur Lain...');
     await page.evaluate(() => {
       document.querySelectorAll('iframe').forEach((f) => f.remove());
       const navLink = document.querySelector('a[href$="/productivity/notes"]');
@@ -286,29 +286,162 @@ async function runTests() {
     );
     await new Promise((r) => setTimeout(r, 300));
 
-    // Pastikan minimal ada 2 catatan di DB
     const noteCardCount = await page.evaluate(() => document.querySelectorAll('h4[title]').length);
     if (noteCardCount < 2) {
       throw new Error(`Minimal butuh 2 catatan sample di halaman Notes, ditemukan ${noteCardCount}`);
     }
 
-    // Klik catatan ke-1 dan ke-2 untuk membuka 2 window sekaligus
+    const popups = [];
+    page.on('popup', (p) => {
+      if (p) {
+        p.on('pageerror', (e) => pageErrors.push('popup: ' + e.message));
+        popups.push(p);
+      }
+    });
+
+    // Klik catatan ke-1 dan ke-2 -> membuka 2 browser popup window terpisah (/notepad-window?noteId=...)
     const cardTitles = await page.evaluate(() => {
       const titles = Array.from(document.querySelectorAll('h4[title]'));
       titles[0].click();
       titles[1].click();
       return [titles[0].innerText.trim(), titles[1].innerText.trim()];
     });
+
+    const waitDeadline = Date.now() + 8000;
+    while (popups.length < 2 && Date.now() < waitDeadline) {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (popups.length < 2) {
+      throw new Error(`Seharusnya terbuka 2 popup window terpisah, aktual: ${popups.length}`);
+    }
+
+    const [popup1, popup2] = popups;
+    await popup1.waitForFunction(
+      () =>
+        location.pathname.endsWith('/notepad-window') &&
+        !!document.querySelector('textarea') &&
+        document.body.innerText.includes('Tersimpan'),
+      { timeout: 8000 }
+    );
+    await popup2.waitForFunction(
+      () =>
+        location.pathname.endsWith('/notepad-window') &&
+        !!document.querySelector('textarea'),
+      { timeout: 8000 }
+    );
+
+    // Uji jendela utama bebas berpindah ke fitur lain sementara 2 window catatan tetap terbuka
+    await page.evaluate(() => {
+      const link = document.querySelector('a[href$="/dev/text-studio"]');
+      if (link) link.click();
+    });
+    await page.waitForFunction(() => document.body.innerText.includes('Text Studio'), {
+      timeout: 5000,
+    });
+    await page.evaluate(() => {
+      const link = document.querySelector('a[href$="/dev/base64"]');
+      if (link) link.click();
+    });
+    await page.waitForFunction(() => document.body.innerText.includes('Base64 Studio'), {
+      timeout: 5000,
+    });
+    if (popup1.isClosed() || popup2.isClosed()) {
+      throw new Error('Popup window catatan ikut tertutup saat jendela utama membuka fitur lain');
+    }
+
+    // Pastikan TIDAK ada tombol tutup duplikat di dalam halaman /notepad-window (cukup tombol [X] bawaan OS)
+    const noDuplicateCloseBtn = await popup1.evaluate(
+      () => document.querySelector('button[aria-label^="Tutup "]') === null
+    );
+    if (!noDuplicateCloseBtn) {
+      throw new Error('Masih terdapat tombol Tutup duplikat di header /notepad-window');
+    }
+
+    // Uji edit di popup1 & proteksi konfirmasi saat ditutup (beforeunload & Esc -> Simpan/Jangan Simpan/Batal)
+    await popup1.focus('textarea');
+    await popup1.keyboard.type('\nPerubahan popup standalone belum disimpan');
+    await popup1.waitForFunction(() => document.body.innerText.includes('Belum Disimpan'), {
+      timeout: 4000,
+    });
+    const beforeUnloadBlocked = await popup1.evaluate(() => {
+      const ev = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    });
+    if (!beforeUnloadBlocked) {
+      throw new Error('Listener beforeunload tidak memblokir penutupan saat catatan belum disimpan');
+    }
+    await popup1.waitForFunction(
+      () => {
+        const t = document.body.innerText;
+        return t.includes('Simpan perubahan pada') && t.includes('Batal') && t.includes('Jangan Simpan') && t.includes('Simpan');
+      },
+      { timeout: 4000 }
+    );
+    await popup1.screenshot({ path: path.join(ARTIFACT_DIR, 'v120-standalone-notepad-confirm.png') });
+    await popup1.evaluate(() => {
+      const discardBtn = Array.from(document.querySelectorAll('button')).find(
+        (b) => b.innerText.trim() === 'Jangan Simpan'
+      );
+      if (!discardBtn) throw new Error('Tombol Jangan Simpan di /notepad-window tidak ditemukan');
+      discardBtn.click();
+    });
     await new Promise((r) => setTimeout(r, 400));
+    if (!popup1.isClosed()) {
+      throw new Error('Popup window 1 seharusnya tertutup setelah klik Jangan Simpan');
+    }
+    if (popup2.isClosed()) {
+      throw new Error('Popup window 2 seharusnya tetap terbuka saat popup 1 ditutup');
+    }
+    await popup2.close();
+    console.log('   OK: 2 window terpisah (/notepad-window) + bebas buka menu lain + dialog tutup berfungsi');
+
+    console.log('5B. Verifikasi Jendela Mengambang Persisten Lintas Menu di Dalam Aplikasi...');
+    await page.evaluate(() => {
+      const link = document.querySelector('a[href$="/productivity/notes"]');
+      if (link) link.click();
+    });
+    await page.waitForFunction(
+      () =>
+        document.body.innerText.includes('Catatan & Kredensial') &&
+        document.querySelectorAll('button[title*="Jendela Mengambang"]').length >= 2,
+      { timeout: 8000 }
+    );
+
+    await page.evaluate(() => {
+      const floatBtns = Array.from(
+        document.querySelectorAll('button[title*="Jendela Mengambang"]')
+      );
+      floatBtns[0].click();
+      floatBtns[1].click();
+    });
+    await new Promise((r) => setTimeout(r, 350));
 
     const winCountAfterOpen = await page.evaluate(
       () => document.querySelectorAll('[data-notepad-window]').length
     );
     if (winCountAfterOpen !== 2) {
-      throw new Error(`Seharusnya terbuka 2 notepad window sekaligus, aktual: ${winCountAfterOpen}`);
+      throw new Error(`Seharusnya terbuka 2 floating window sekaligus, aktual: ${winCountAfterOpen}`);
     }
 
-    // Edit textarea pada window pertama/teratas (paling belakang di DOM atau pertama ditemukan)
+    // Pindah ke menu Text Studio dan pastikan kedua floating window tetap terbuka & tidak menghalangi navigasi
+    await page.evaluate(() => {
+      const link = document.querySelector('a[href$="/dev/text-studio"]');
+      if (link) link.click();
+    });
+    await page.waitForFunction(() => document.body.innerText.includes('Text Studio'), {
+      timeout: 5000,
+    });
+    const winCountOnOtherPage = await page.evaluate(
+      () => document.querySelectorAll('[data-notepad-window]').length
+    );
+    if (winCountOnOtherPage !== 2) {
+      throw new Error(
+        `Floating window catatan harus tetap terbuka saat pindah menu ke Text Studio, aktual: ${winCountOnOtherPage}`
+      );
+    }
+
+    // Edit textarea pada window mengambang pertama
     const taSelector = '[data-notepad-window] textarea';
     await page.focus(taSelector);
     await page.keyboard.type('\nPerubahan test belum disimpan');
@@ -317,11 +450,10 @@ async function runTests() {
     const dirtyOk = await page.evaluate(() => document.body.innerText.includes('Belum Disimpan'));
     if (!dirtyOk) throw new Error('Badge Belum Disimpan tidak muncul setelah mengetik');
 
-    // Klik tombol tutup pada window pertama yang kotor
     await page.evaluate(() => {
       const win = document.querySelector('[data-notepad-window]');
       const closeBtn = win && win.querySelector('button[aria-label^="Tutup "]');
-      if (!closeBtn) throw new Error('Tombol tutup window notepad tidak ditemukan');
+      if (!closeBtn) throw new Error('Tombol tutup floating window notepad tidak ditemukan');
       closeBtn.click();
     });
     await new Promise((r) => setTimeout(r, 250));
@@ -339,7 +471,6 @@ async function runTests() {
 
     await page.screenshot({ path: path.join(ARTIFACT_DIR, 'v120-notes-multiwindow-confirm.png') });
 
-    // Klik Jangan Simpan -> window pertama tertutup, window kedua tetap terbuka
     await page.evaluate(() => {
       const win = document.querySelector('[data-notepad-window]');
       const btns = win ? Array.from(win.querySelectorAll('button')) : [];
@@ -354,7 +485,7 @@ async function runTests() {
     );
     if (winCountAfterDiscard !== 1) {
       throw new Error(
-        `Setelah Jangan Simpan, seharusnya tersisa 1 window terbuka, aktual: ${winCountAfterDiscard}`
+        `Setelah Jangan Simpan, seharusnya tersisa 1 floating window terbuka, aktual: ${winCountAfterDiscard}`
       );
     }
 
@@ -363,7 +494,7 @@ async function runTests() {
     }
 
     console.log(
-      'SEMUA TEST v1.2.0 LULUS! (Multi-window Notes:',
+      'SEMUA TEST v1.2.0 LULUS! (Popup & Floating Notes:',
       cardTitles.join(' & '),
       '| pageErrors: 0)'
     );
