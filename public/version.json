@@ -1,8 +1,8 @@
 {
   "name": "SiKomputer",
-  "version": "1.2.0",
-  "versionCode": 3,
-  "builtAt": "2026-11-19T11:29:53.616Z",
+  "version": "1.2.1",
+  "versionCode": 4,
+  "builtAt": "2026-11-19T11:44:44.676Z",
   "repository": "dorobokun16/SiKomputer",
   "releasePageUrl": "https://github.com/dorobokun16/SiKomputer/releases/latest",
   "pagesUrl": "https://dorobokun16.github.io/SiKomputer/",
@@ -13,10 +13,6 @@
     "webBundleUrl": "https://github.com/dorobokun16/SiKomputer/releases/latest/download/SiKomputer-web-dist.zip"
   },
   "notes": [
-    "Menu baru Personal Features dengan pemindahan Monitoring RPA",
-    "Text Studio baru (JSON Formatter, Regex Tester, Text Replace, Text Diff, URL Encoder/Decoder & Query Parser)",
-    "QR Code Studio offline (URL, Teks, Wi-Fi + Kartu Cetak PNG, vCard, WhatsApp, Email, SVG/PNG, Pemindai Gambar)",
-    "PDF Studio (PDF Repair, Split PDF ZIP/Rentang/Halaman, Merge PDF)",
-    "Catatan & Kredensial multi-jendela paralel + konfirmasi Simpan/Jangan Simpan saat tutup"
+    "Catatan & Kredensial perbaikan bug"
   ]
 }

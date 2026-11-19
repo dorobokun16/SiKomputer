@@ -1,17 +1,13 @@
 {
   "name": "sikomputer",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "sikomputer": {
-    "versionCode": 3,
+    "versionCode": 4,
     "githubOwner": "dorobokun16",
     "githubRepo": "SiKomputer",
     "releaseNotes": [
-      "Menu baru Personal Features dengan pemindahan Monitoring RPA",
-      "Text Studio baru (JSON Formatter, Regex Tester, Text Replace, Text Diff, URL Encoder/Decoder & Query Parser)",
-      "QR Code Studio offline (URL, Teks, Wi-Fi + Kartu Cetak PNG, vCard, WhatsApp, Email, SVG/PNG, Pemindai Gambar)",
-      "PDF Studio (PDF Repair, Split PDF ZIP/Rentang/Halaman, Merge PDF)",
-      "Catatan & Kredensial multi-jendela paralel + konfirmasi Simpan/Jangan Simpan saat tutup"
+      "Catatan & Kredensial perbaikan bug"
     ]
   },
   "type": "module",
