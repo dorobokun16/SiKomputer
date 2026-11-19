@@ -1,14 +1,17 @@
 {
   "name": "sikomputer",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.0",
   "sikomputer": {
-    "versionCode": 2,
+    "versionCode": 3,
     "githubOwner": "dorobokun16",
     "githubRepo": "SiKomputer",
     "releaseNotes": [
-      "Perbaikan tata letak responsif Mobile HP & modal Notepad",
-      "Penambahan fitur Cek Pembaruan & Update otomatis via GitHub (PWA, .exe, .app, .apk)"
+      "Menu baru Personal Features dengan pemindahan Monitoring RPA",
+      "Text Studio baru (JSON Formatter, Regex Tester, Text Replace, Text Diff, URL Encoder/Decoder & Query Parser)",
+      "QR Code Studio offline (URL, Teks, Wi-Fi + Kartu Cetak PNG, vCard, WhatsApp, Email, SVG/PNG, Pemindai Gambar)",
+      "PDF Studio (PDF Repair, Split PDF ZIP/Rentang/Halaman, Merge PDF)",
+      "Catatan & Kredensial multi-jendela paralel + konfirmasi Simpan/Jangan Simpan saat tutup"
     ]
   },
   "type": "module",

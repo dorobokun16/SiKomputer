@@ -9,6 +9,7 @@ import {
   Lock,
   Maximize2,
   Minimize2,
+  Minus,
   Plus,
   Pin,
   PinOff,
@@ -23,8 +24,9 @@ import {
   Globe,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useSearchParams } from 'react-router-dom'
 import { db, type NoteEntity } from '@/db/dexie'
 import {
   Badge,
@@ -40,6 +42,30 @@ import { PageHeader } from '@/components/ui/blocks'
 import { cn } from '@/lib/cn'
 
 type CategoryFilter = 'all' | 'password' | 'endpoint' | 'env' | 'note'
+
+export interface NotepadWindowItem {
+  windowId: string
+  noteId: string
+  title: string
+  content: string
+  username: string
+  password: string
+  url: string
+  category: 'password' | 'endpoint' | 'env' | 'note'
+  isPinned: boolean
+  updatedAt: string
+  isDirty: boolean
+  size: 'floating' | 'normal' | 'large' | 'fullscreen'
+  minimized: boolean
+  zIndex: number
+  offsetX: number
+  offsetY: number
+  fontFamily: 'mono' | 'sans'
+  fontSize: 'sm' | 'base' | 'lg'
+  wordWrap: boolean
+  secretVisible: boolean
+  confirmCloseOpen: boolean
+}
 
 const sampleSeedNotes: Omit<NoteEntity, 'id'>[] = [
   {
@@ -79,6 +105,7 @@ const sampleSeedNotes: Omit<NoteEntity, 'id'>[] = [
 
 export function NotesVaultPage() {
   const toast = useToast()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [notes, setNotes] = useState<NoteEntity[]>([])
   const [filterCat, setFilterCat] = useState<CategoryFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -99,21 +126,17 @@ export function NotesVaultPage() {
   const [tagsInput, setTagsInput] = useState('')
   const [isPinned, setIsPinned] = useState(false)
 
-  // Notepad Window State (Resizable / Fullscreen Notepad Window)
-  const [notepadNote, setNotepadNote] = useState<NoteEntity | null>(null)
-  const [notepadSize, setNotepadSize] = useState<'normal' | 'large' | 'fullscreen'>('large')
-  const [notepadTitle, setNotepadTitle] = useState('')
-  const [notepadContent, setNotepadContent] = useState('')
-  const [notepadUsername, setNotepadUsername] = useState('')
-  const [notepadPassword, setNotepadPassword] = useState('')
-  const [notepadUrl, setNotepadUrl] = useState('')
-  const [notepadCategory, setNotepadCategory] = useState<'password' | 'endpoint' | 'env' | 'note'>('note')
-  const [notepadIsPinned, setNotepadIsPinned] = useState(false)
-  const [notepadIsDirty, setNotepadIsDirty] = useState(false)
-  const [notepadFontFamily, setNotepadFontFamily] = useState<'mono' | 'sans'>('mono')
-  const [notepadFontSize, setNotepadFontSize] = useState<'sm' | 'base' | 'lg'>('base')
-  const [notepadWordWrap, setNotepadWordWrap] = useState(true)
-  const [isNotepadSecretVisible, setIsNotepadSecretVisible] = useState(false)
+  // Multi-Window Notepad State
+  const [openWindows, setOpenWindows] = useState<NotepadWindowItem[]>([])
+  const [activeWindowId, setActiveWindowId] = useState<string | null>(null)
+  const topZRef = useRef(82)
+  const dragRef = useRef<{
+    windowId: string
+    startX: number
+    startY: number
+    origX: number
+    origY: number
+  } | null>(null)
 
   // Load Notes from Dexie
   const loadNotes = async () => {
@@ -143,6 +166,57 @@ export function NotesVaultPage() {
     void loadNotes()
   }, [])
 
+  // Auto-open catatan saat dibuka via popup browser ?openNote=<id>
+  useEffect(() => {
+    const targetId = searchParams.get('openNote')
+    if (!targetId || notes.length === 0) return
+    const target = notes.find((n) => n.id === targetId)
+    if (target) {
+      handleOpenNotepad(target, 'fullscreen')
+      searchParams.delete('openNote')
+      setSearchParams(searchParams, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notes, searchParams])
+
+  // Peringatan browser sebelum menutup tab/popup jika ada jendela catatan belum disimpan
+  useEffect(() => {
+    const hasDirty = openWindows.some((w) => w.isDirty)
+    if (!hasDirty) return
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [openWindows])
+
+  // Pointer drag listener untuk jendela mengambang
+  useEffect(() => {
+    const handleMove = (e: PointerEvent) => {
+      const drag = dragRef.current
+      if (!drag) return
+      const dx = e.clientX - drag.startX
+      const dy = e.clientY - drag.startY
+      setOpenWindows((prev) =>
+        prev.map((w) =>
+          w.windowId === drag.windowId
+            ? { ...w, offsetX: drag.origX + dx, offsetY: drag.origY + dy }
+            : w,
+        ),
+      )
+    }
+    const handleUp = () => {
+      dragRef.current = null
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+    }
+  }, [])
+
   const handleCopy = (text: string, key: string, label = 'Teks') => {
     navigator.clipboard.writeText(text)
     setCopiedKey(key)
@@ -154,75 +228,164 @@ export function NotesVaultPage() {
     setUnmaskedIds((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
-  // Notepad Window Controls
-  const handleOpenNotepad = (n: NoteEntity) => {
-    setNotepadNote(n)
-    setNotepadTitle(n.title)
-    setNotepadContent(n.content || '')
-    setNotepadUsername(n.username || '')
-    setNotepadPassword(n.password || '')
-    setNotepadUrl(n.url || '')
-    setNotepadCategory(n.category)
-    setNotepadIsPinned(n.isPinned)
-    setNotepadIsDirty(false)
-    setIsNotepadSecretVisible(false)
+  const nextTopZ = () => {
+    topZRef.current += 1
+    return topZRef.current
   }
 
-  const handleCloseNotepad = () => {
-    setNotepadNote(null)
+  const updateWindow = (windowId: string, patch: Partial<NotepadWindowItem>) => {
+    setOpenWindows((prev) => prev.map((w) => (w.windowId === windowId ? { ...w, ...patch } : w)))
   }
 
-  const handleSaveNotepad = async () => {
-    if (!notepadNote) return
+  const focusWindow = (windowId: string) => {
+    const z = nextTopZ()
+    setActiveWindowId(windowId)
+    setOpenWindows((prev) =>
+      prev.map((w) => (w.windowId === windowId ? { ...w, minimized: false, zIndex: z } : w)),
+    )
+  }
+
+  // Notepad Multi-Window Controls
+  const handleOpenNotepad = (n: NoteEntity, initialSize: NotepadWindowItem['size'] = 'floating') => {
+    const existing = openWindows.find((w) => w.noteId === n.id)
+    if (existing) {
+      focusWindow(existing.windowId)
+      return
+    }
+    const z = nextTopZ()
+    const winId = 'np-' + Math.random().toString(36).slice(2, 9)
+    const cascadeStep = openWindows.length % 6
+    const newWin: NotepadWindowItem = {
+      windowId: winId,
+      noteId: n.id,
+      title: n.title,
+      content: n.content || '',
+      username: n.username || '',
+      password: n.password || '',
+      url: n.url || '',
+      category: n.category,
+      isPinned: n.isPinned,
+      updatedAt: n.updatedAt,
+      isDirty: false,
+      size: initialSize,
+      minimized: false,
+      zIndex: z,
+      offsetX: cascadeStep * 28,
+      offsetY: cascadeStep * 28,
+      fontFamily: 'mono',
+      fontSize: 'base',
+      wordWrap: true,
+      secretVisible: false,
+      confirmCloseOpen: false,
+    }
+    setOpenWindows((prev) => [...prev, newWin])
+    setActiveWindowId(winId)
+  }
+
+  const forceCloseWindow = (windowId: string) => {
+    setOpenWindows((prev) => {
+      const remaining = prev.filter((w) => w.windowId !== windowId)
+      if (activeWindowId === windowId) {
+        const nextTop = [...remaining].sort((a, b) => b.zIndex - a.zIndex)[0]
+        setActiveWindowId(nextTop ? nextTop.windowId : null)
+      }
+      return remaining
+    })
+  }
+
+  const requestCloseWindow = (windowId: string) => {
+    const win = openWindows.find((w) => w.windowId === windowId)
+    if (!win) return
+    if (!win.isDirty) {
+      forceCloseWindow(windowId)
+      return
+    }
+    const z = nextTopZ()
+    setActiveWindowId(windowId)
+    updateWindow(windowId, { confirmCloseOpen: true, minimized: false, zIndex: z })
+  }
+
+  const requestCloseAllWindows = () => {
+    const firstDirty = openWindows.find((w) => w.isDirty)
+    if (!firstDirty) {
+      setOpenWindows([])
+      setActiveWindowId(null)
+      return
+    }
+    requestCloseWindow(firstDirty.windowId)
+    toast({
+      title: 'Ada catatan yang belum disimpan',
+      description: 'Konfirmasi Simpan atau Jangan Simpan sebelum menutup semua jendela.',
+      tone: 'warning',
+    })
+  }
+
+  const handleSaveWindow = async (windowId: string, closeAfterSave = false) => {
+    const win = openWindows.find((w) => w.windowId === windowId)
+    if (!win) return
     try {
       const now = new Date().toISOString()
-      await db.notes.update(notepadNote.id, {
-        title: notepadTitle.trim() || notepadNote.title,
-        content: notepadContent,
-        username: notepadUsername.trim() || undefined,
-        password: notepadPassword || undefined,
-        url: notepadUrl.trim() || undefined,
-        category: notepadCategory,
-        isPinned: notepadIsPinned,
+      await db.notes.update(win.noteId, {
+        title: win.title.trim() || 'Catatan Tanpa Judul',
+        content: win.content,
+        username: win.username.trim() || undefined,
+        password: win.password || undefined,
+        url: win.url.trim() || undefined,
+        category: win.category,
+        isPinned: win.isPinned,
         updatedAt: now,
       })
-      setNotepadIsDirty(false)
       toast({ title: 'Catatan Berhasil Disimpan', tone: 'success' })
       await loadNotes()
+      if (closeAfterSave) {
+        forceCloseWindow(windowId)
+      } else {
+        updateWindow(windowId, { isDirty: false, confirmCloseOpen: false, updatedAt: now })
+      }
     } catch {
       toast({ title: 'Gagal Menyimpan Catatan', tone: 'danger' })
     }
   }
 
-  const handleDownloadNotepad = () => {
-    if (!notepadNote) return
-    const text = notepadContent
-    const safeTitle = (notepadTitle || 'catatan').toLowerCase().replace(/[^a-z0-9_-]/gi, '_')
+  const handleDownloadWindow = (win: NotepadWindowItem) => {
+    const safeTitle = (win.title || 'catatan').toLowerCase().replace(/[^a-z0-9_-]/gi, '_')
     const filename = `${safeTitle}.txt`
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
+    const blob = new Blob([win.content], { type: 'text/plain;charset=utf-8' })
+    const fileUrl = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url
+    a.href = fileUrl
     a.download = filename
     a.click()
-    URL.revokeObjectURL(url)
+    URL.revokeObjectURL(fileUrl)
     toast({ title: `File ${filename} berhasil diunduh`, tone: 'success' })
   }
 
-  // Keyboard shortcut Ctrl+S / Cmd+S & Escape inside Notepad
+  const handleOpenInBrowserPopup = (win: NotepadWindowItem) => {
+    const targetUrl = `${window.location.origin}${import.meta.env.BASE_URL}productivity/notes?openNote=${encodeURIComponent(win.noteId)}`
+    window.open(targetUrl, `sikomputer_note_${win.noteId}`, 'popup=yes,width=980,height=720,resizable=yes,scrollbars=yes')
+  }
+
+  // Keyboard shortcut Ctrl+S / Cmd+S & Escape untuk jendela Notepad aktif
   useEffect(() => {
-    if (!notepadNote) return
+    if (openWindows.length === 0 || !activeWindowId) return
     const handleKeyDown = (e: KeyboardEvent) => {
+      const win = openWindows.find((w) => w.windowId === activeWindowId)
+      if (!win || win.minimized) return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault()
-        void handleSaveNotepad()
+        void handleSaveWindow(win.windowId, false)
       } else if (e.key === 'Escape') {
-        handleCloseNotepad()
+        if (win.confirmCloseOpen) {
+          updateWindow(win.windowId, { confirmCloseOpen: false })
+        } else {
+          requestCloseWindow(win.windowId)
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [notepadNote, notepadTitle, notepadContent, notepadUsername, notepadPassword, notepadUrl, notepadCategory, notepadIsPinned])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openWindows, activeWindowId])
 
   const handleOpenCreate = () => {
     setEditingNote(null)
@@ -681,313 +844,447 @@ export function NotesVaultPage() {
       </Modal>
 
       {/* ===============================================================
-          NOTEPAD WINDOW (RESIZABLE / FULLSCREEN EXPANDABLE EDITOR)
+          MULTI-WINDOW NOTEPAD PORTAL + TASKBAR DOCK
           =============================================================== */}
-      {notepadNote && createPortal(
-        <div
-          className={cn(
-            'fixed inset-0 z-[80] flex items-center justify-center bg-black/75 backdrop-blur-xs transition-all animate-in fade-in duration-150',
-            notepadSize === 'fullscreen' ? 'p-0' : 'p-2.5 sm:p-5'
-          )}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) handleCloseNotepad()
-          }}
-        >
-          <div
-            className={cn(
-              'flex flex-col bg-surface border border-border shadow-2xl transition-all duration-200 overflow-hidden',
-              notepadSize === 'fullscreen'
-                ? 'w-screen h-dvh rounded-none'
-                : notepadSize === 'large'
-                  ? 'w-full max-w-5xl h-[92dvh] sm:h-[90vh] rounded-xl'
-                  : 'w-full max-w-3xl h-[82dvh] sm:h-[78vh] rounded-xl'
-            )}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Title Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/60 px-3 py-2 sm:px-4 sm:py-2.5 select-none">
-              <div className="flex items-center gap-2 min-w-0 flex-1 mr-1 sm:mr-3">
-                {notepadCategory === 'password' && <KeyRound className="size-4 text-amber-500 shrink-0" />}
-                {notepadCategory === 'endpoint' && <Server className="size-4 text-blue-500 shrink-0" />}
-                {notepadCategory === 'env' && <Terminal className="size-4 text-emerald-500 shrink-0" />}
-                {notepadCategory === 'note' && <FileText className="size-4 text-purple-500 shrink-0" />}
+      {openWindows.length > 0 && createPortal(
+        <>
+          {openWindows.map((win) => {
+            if (win.minimized) return null
+            const isActive = activeWindowId === win.windowId
+            const isFullscreen = win.size === 'fullscreen'
+            const isFloating = win.size === 'floating'
 
-                <input
-                  type="text"
-                  value={notepadTitle}
-                  onChange={(e) => {
-                    setNotepadTitle(e.target.value)
-                    setNotepadIsDirty(true)
-                  }}
-                  placeholder="Judul Catatan..."
-                  className="bg-transparent font-semibold text-sm sm:text-base text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary rounded px-1.5 py-0.5 truncate min-w-0 flex-1"
-                />
-
-                <Badge tone="neutral" className="hidden md:inline-flex text-[11px] capitalize">
-                  {notepadCategory}
-                </Badge>
-
-                {notepadIsDirty ? (
-                  <Badge tone="warning" className="text-[10px] shrink-0">
-                    Belum Disimpan
-                  </Badge>
-                ) : (
-                  <Badge tone="success" className="text-[10px] shrink-0">
-                    Tersimpan
-                  </Badge>
-                )}
-              </div>
-
-              {/* Window Controls */}
-              <div className="flex items-center gap-1 shrink-0">
-                {/* Size toggle: Compact, Lebar, Fullscreen */}
-                <div className="flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs text-muted">
-                  <button
-                    onClick={() => setNotepadSize('normal')}
-                    className={cn(
-                      'hidden sm:inline-block px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer',
-                      notepadSize === 'normal' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground'
-                    )}
-                    title="Jendela Sedang (75vh)"
-                  >
-                    Sedang
-                  </button>
-                  <button
-                    onClick={() => setNotepadSize('large')}
-                    className={cn(
-                      'hidden sm:inline-block px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer',
-                      notepadSize === 'large' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground'
-                    )}
-                    title="Jendela Lebar (5XL)"
-                  >
-                    Lebar
-                  </button>
-                  <button
-                    onClick={() => setNotepadSize(notepadSize === 'fullscreen' ? 'large' : 'fullscreen')}
-                    className={cn(
-                      'px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer',
-                      notepadSize === 'fullscreen' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground'
-                    )}
-                    title={notepadSize === 'fullscreen' ? 'Keluar Layar Penuh' : 'Layar Penuh (Full Screen)'}
-                  >
-                    {notepadSize === 'fullscreen' ? (
-                      <>
-                        <Minimize2 className="size-3" /> Kecilkan
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="size-3" /> Full
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                <button
-                  onClick={handleCloseNotepad}
-                  className="rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-danger transition-colors ml-1 cursor-pointer"
-                  title="Tutup Notepad (Esc)"
-                >
-                  <X className="size-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Credential Quick Bar (if URL, Username, or Password exist) */}
-            {(notepadUrl || notepadUsername || notepadPassword) && (
-              <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2/30 px-4 py-2 text-xs">
-                {notepadUrl && (
-                  <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
-                    <Globe className="size-3.5 text-primary shrink-0" />
-                    <span className="font-mono text-[11px] text-muted max-w-[220px] truncate" title={notepadUrl}>
-                      {notepadUrl}
-                    </span>
-                    <button
-                      onClick={() => handleCopy(notepadUrl, 'np-url', 'URL')}
-                      className="p-0.5 text-muted hover:text-foreground"
-                      title="Salin URL"
-                    >
-                      {copiedKey === 'np-url' ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-                    </button>
-                    <a
-                      href={notepadUrl.startsWith('http') ? notepadUrl : `https://${notepadUrl}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="p-0.5 text-muted hover:text-foreground"
-                      title="Buka Website"
-                    >
-                      <ExternalLink className="size-3" />
-                    </a>
-                  </div>
-                )}
-
-                {notepadUsername && (
-                  <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
-                    <span className="text-[11px] text-muted">User:</span>
-                    <span className="font-mono font-medium text-[11px] text-foreground">{notepadUsername}</span>
-                    <button
-                      onClick={() => handleCopy(notepadUsername, 'np-user', 'Username')}
-                      className="p-0.5 text-muted hover:text-foreground"
-                      title="Salin Username"
-                    >
-                      {copiedKey === 'np-user' ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-                    </button>
-                  </div>
-                )}
-
-                {notepadPassword && (
-                  <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
-                    <span className="text-[11px] text-muted">Secret:</span>
-                    <span className="font-mono font-semibold tracking-wider text-[11px] text-foreground">
-                      {isNotepadSecretVisible ? notepadPassword : '••••••••••••'}
-                    </span>
-                    <button
-                      onClick={() => setIsNotepadSecretVisible(!isNotepadSecretVisible)}
-                      className="p-0.5 text-muted hover:text-foreground"
-                      title={isNotepadSecretVisible ? 'Sembunyikan' : 'Tampilkan'}
-                    >
-                      {isNotepadSecretVisible ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
-                    </button>
-                    <button
-                      onClick={() => handleCopy(notepadPassword, 'np-pass', 'Password')}
-                      className="p-0.5 text-muted hover:text-foreground"
-                      title="Salin Password"
-                    >
-                      {copiedKey === 'np-pass' ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Editor Toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/20 px-3 py-2 text-xs sm:px-4">
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                {/* Font Family Toggle */}
-                <button
-                  onClick={() => setNotepadFontFamily(notepadFontFamily === 'mono' ? 'sans' : 'mono')}
-                  className={cn(
-                    'rounded border border-border px-2.5 py-1 font-mono text-[11px] transition-colors cursor-pointer',
-                    notepadFontFamily === 'mono' ? 'bg-primary/10 text-primary border-primary/40' : 'bg-surface text-muted hover:text-foreground'
-                  )}
-                  title="Ganti Font (Monospace / Sans)"
-                >
-                  {notepadFontFamily === 'mono' ? 'Monospace (Code)' : 'Sans-Serif (Text)'}
-                </button>
-
-                {/* Font Size Selector */}
-                <div className="flex items-center rounded border border-border bg-surface text-[11px]">
-                  <button
-                    onClick={() => setNotepadFontSize('sm')}
-                    className={cn(
-                      'px-2 py-1 rounded-l transition-colors cursor-pointer',
-                      notepadFontSize === 'sm' ? 'bg-primary text-white' : 'text-muted hover:text-foreground'
-                    )}
-                    title="Font Kecil (12px)"
-                  >
-                    A-
-                  </button>
-                  <button
-                    onClick={() => setNotepadFontSize('base')}
-                    className={cn(
-                      'px-2 py-1 transition-colors cursor-pointer',
-                      notepadFontSize === 'base' ? 'bg-primary text-white' : 'text-muted hover:text-foreground'
-                    )}
-                    title="Font Standar (14px)"
-                  >
-                    A
-                  </button>
-                  <button
-                    onClick={() => setNotepadFontSize('lg')}
-                    className={cn(
-                      'px-2 py-1 rounded-r transition-colors cursor-pointer',
-                      notepadFontSize === 'lg' ? 'bg-primary text-white' : 'text-muted hover:text-foreground'
-                    )}
-                    title="Font Besar (16px)"
-                  >
-                    A+
-                  </button>
-                </div>
-
-                {/* Word Wrap Toggle */}
-                <button
-                  onClick={() => setNotepadWordWrap(!notepadWordWrap)}
-                  className={cn(
-                    'rounded border border-border px-2 py-1 text-[11px] transition-colors cursor-pointer',
-                    notepadWordWrap ? 'bg-primary/10 text-primary border-primary/40' : 'bg-surface text-muted hover:text-foreground'
-                  )}
-                  title="Toggle Word Wrap"
-                >
-                  {notepadWordWrap ? 'Wrap: On' : 'Wrap: Off'}
-                </button>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                <Button
-                  variant="ghost"
-                  className="h-7 text-xs px-2"
-                  onClick={() => {
-                    navigator.clipboard.writeText(notepadContent)
-                    toast({ title: 'Seluruh teks catatan tersalin!', tone: 'success' })
-                  }}
-                >
-                  <Copy className="mr-1 size-3" />
-                  Salin
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="h-7 text-xs px-2"
-                  onClick={handleDownloadNotepad}
-                >
-                  <Download className="mr-1 size-3" />
-                  .txt
-                </Button>
-                <Button
-                  variant="primary"
-                  className="h-7 text-xs px-2.5 sm:px-3 shadow-xs"
-                  onClick={handleSaveNotepad}
-                >
-                  <Save className="mr-1 size-3.5" />
-                  Simpan
-                </Button>
-              </div>
-            </div>
-
-            {/* Main Textarea Canvas */}
-            <div className="relative flex-1 bg-surface-2/10 overflow-hidden flex">
-              <textarea
-                value={notepadContent}
-                onChange={(e) => {
-                  setNotepadContent(e.target.value)
-                  setNotepadIsDirty(true)
-                }}
-                placeholder="Tuliskan catatan panjang, kredensial, konfigurasi .env, endpoint API, atau dokumentasi di sini... (Gunakan Ctrl+S untuk menyimpan instan)"
+            return (
+              <div
+                key={win.windowId}
+                data-notepad-window={win.windowId}
+                data-note-id={win.noteId}
+                style={{ zIndex: win.zIndex }}
+                onPointerDown={() => focusWindow(win.windowId)}
                 className={cn(
-                  'w-full h-full p-4 sm:p-6 bg-transparent text-foreground resize-none focus:outline-hidden border-none overflow-y-auto leading-relaxed',
-                  notepadFontFamily === 'mono' ? 'font-mono' : 'font-sans',
-                  notepadFontSize === 'sm' ? 'text-xs' : notepadFontSize === 'lg' ? 'text-base' : 'text-sm',
-                  notepadWordWrap ? 'whitespace-pre-wrap' : 'whitespace-pre overflow-x-auto'
+                  'fixed inset-0 pointer-events-none flex items-center justify-center',
+                  isFullscreen ? 'p-0' : 'p-2 sm:p-4',
                 )}
-                autoFocus
-                spellCheck={false}
-              />
-            </div>
+              >
+                <div
+                  style={
+                    isFloating
+                      ? { transform: `translate3d(${win.offsetX}px, ${win.offsetY}px, 0)` }
+                      : undefined
+                  }
+                  className={cn(
+                    'pointer-events-auto relative flex flex-col bg-surface border shadow-2xl overflow-hidden transition-shadow',
+                    isActive ? 'border-primary/70 ring-1 ring-primary/30' : 'border-border opacity-95',
+                    isFullscreen
+                      ? 'w-screen h-dvh rounded-none'
+                      : win.size === 'large'
+                        ? 'w-full max-w-5xl h-[88dvh] sm:h-[84vh] rounded-xl'
+                        : win.size === 'normal'
+                          ? 'w-full max-w-3xl h-[80dvh] sm:h-[75vh] rounded-xl'
+                          : 'w-full sm:w-[760px] h-[84dvh] sm:h-[70vh] rounded-xl sm:resize sm:min-w-[380px] sm:min-h-[340px] max-w-[96vw] max-h-[86dvh]',
+                  )}
+                >
+                  {/* Title Bar (Draggable saat Mengambang) */}
+                  <div
+                    onPointerDown={(e) => {
+                      if (!isFloating) return
+                      const tag = (e.target as HTMLElement).tagName
+                      if (tag === 'INPUT' || tag === 'BUTTON' || (e.target as HTMLElement).closest('button')) {
+                        return
+                      }
+                      dragRef.current = {
+                        windowId: win.windowId,
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        origX: win.offsetX,
+                        origY: win.offsetY,
+                      }
+                    }}
+                    className={cn(
+                      'flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/80 px-3 py-2 sm:px-4 select-none',
+                      isFloating ? 'sm:cursor-move' : '',
+                    )}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1 mr-1">
+                      {win.category === 'password' && <KeyRound className="size-4 text-amber-500 shrink-0" />}
+                      {win.category === 'endpoint' && <Server className="size-4 text-blue-500 shrink-0" />}
+                      {win.category === 'env' && <Terminal className="size-4 text-emerald-500 shrink-0" />}
+                      {win.category === 'note' && <FileText className="size-4 text-purple-500 shrink-0" />}
 
-            {/* Notepad Status Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface-2/50 px-3 py-1.5 text-[11px] text-muted select-none sm:px-4">
-              <div className="flex items-center gap-3">
-                <span>Baris: {notepadContent.split('\n').length}</span>
-                <span>Kata: {notepadContent.trim() ? notepadContent.trim().split(/\s+/).length : 0}</span>
-                <span>Karakter: {notepadContent.length}</span>
+                      <input
+                        type="text"
+                        value={win.title}
+                        onChange={(e) => updateWindow(win.windowId, { title: e.target.value, isDirty: true })}
+                        placeholder="Judul Catatan..."
+                        className="bg-transparent font-semibold text-sm sm:text-base text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary rounded px-1.5 py-0.5 truncate min-w-0 flex-1"
+                      />
+
+                      {win.isDirty ? (
+                        <Badge tone="warning" className="text-[10px] shrink-0">
+                          Belum Disimpan
+                        </Badge>
+                      ) : (
+                        <Badge tone="success" className="text-[10px] shrink-0">
+                          Tersimpan
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* Window Controls */}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center rounded-lg border border-border bg-surface p-0.5 text-xs text-muted">
+                        <button
+                          type="button"
+                          onClick={() => updateWindow(win.windowId, { size: 'floating' })}
+                          className={cn(
+                            'hidden sm:inline-block px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer',
+                            win.size === 'floating' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground',
+                          )}
+                          title="Jendela Mengambang Multi-Window"
+                        >
+                          Jendela
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateWindow(win.windowId, { size: 'large' })}
+                          className={cn(
+                            'hidden sm:inline-block px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer',
+                            win.size === 'large' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground',
+                          )}
+                          title="Jendela Lebar"
+                        >
+                          Lebar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateWindow(win.windowId, {
+                              size: win.size === 'fullscreen' ? 'floating' : 'fullscreen',
+                            })
+                          }
+                          className={cn(
+                            'px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer',
+                            win.size === 'fullscreen' ? 'bg-primary text-white shadow-xs' : 'hover:text-foreground',
+                          )}
+                          title={win.size === 'fullscreen' ? 'Kecilkan Jendela' : 'Layar Penuh'}
+                        >
+                          {win.size === 'fullscreen' ? (
+                            <>
+                              <Minimize2 className="size-3" /> Kecilkan
+                            </>
+                          ) : (
+                            <>
+                              <Maximize2 className="size-3" /> Full
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenInBrowserPopup(win)}
+                        className="hidden sm:inline-flex rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-primary transition-colors cursor-pointer"
+                        title="Buka di Jendela Browser Terpisah"
+                      >
+                        <ExternalLink className="size-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => updateWindow(win.windowId, { minimized: true })}
+                        className="rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-foreground transition-colors cursor-pointer"
+                        title="Ciutkan ke Bilah Bawah"
+                      >
+                        <Minus className="size-4" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => requestCloseWindow(win.windowId)}
+                        className="rounded-lg p-1.5 text-muted hover:bg-surface-2 hover:text-danger transition-colors cursor-pointer"
+                        title="Tutup Notepad (Esc)"
+                        aria-label={`Tutup ${win.title}`}
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Credential Quick Bar */}
+                  {(win.url || win.username || win.password) && (
+                    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2/30 px-4 py-2 text-xs">
+                      {win.url && (
+                        <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
+                          <Globe className="size-3.5 text-primary shrink-0" />
+                          <span className="font-mono text-[11px] text-muted max-w-[200px] truncate" title={win.url}>
+                            {win.url}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(win.url, `np-url-${win.windowId}`, 'URL')}
+                            className="p-0.5 text-muted hover:text-foreground"
+                            title="Salin URL"
+                          >
+                            {copiedKey === `np-url-${win.windowId}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+                          </button>
+                          <a
+                            href={win.url.startsWith('http') ? win.url : `https://${win.url}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-0.5 text-muted hover:text-foreground"
+                            title="Buka Website"
+                          >
+                            <ExternalLink className="size-3" />
+                          </a>
+                        </div>
+                      )}
+
+                      {win.username && (
+                        <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
+                          <span className="text-[11px] text-muted">User:</span>
+                          <span className="font-mono font-medium text-[11px] text-foreground">{win.username}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(win.username, `np-user-${win.windowId}`, 'Username')}
+                            className="p-0.5 text-muted hover:text-foreground"
+                            title="Salin Username"
+                          >
+                            {copiedKey === `np-user-${win.windowId}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+                          </button>
+                        </div>
+                      )}
+
+                      {win.password && (
+                        <div className="flex items-center gap-1.5 rounded bg-surface border border-border px-2.5 py-1">
+                          <span className="text-[11px] text-muted">Secret:</span>
+                          <span className="font-mono font-semibold tracking-wider text-[11px] text-foreground">
+                            {win.secretVisible ? win.password : '••••••••••••'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => updateWindow(win.windowId, { secretVisible: !win.secretVisible })}
+                            className="p-0.5 text-muted hover:text-foreground"
+                            title={win.secretVisible ? 'Sembunyikan' : 'Tampilkan'}
+                          >
+                            {win.secretVisible ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(win.password, `np-pass-${win.windowId}`, 'Password')}
+                            className="p-0.5 text-muted hover:text-foreground"
+                            title="Salin Password"
+                          >
+                            {copiedKey === `np-pass-${win.windowId}` ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Editor Toolbar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-surface-2/20 px-3 py-2 text-xs sm:px-4">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateWindow(win.windowId, { fontFamily: win.fontFamily === 'mono' ? 'sans' : 'mono' })
+                        }
+                        className={cn(
+                          'rounded border border-border px-2.5 py-1 font-mono text-[11px] transition-colors cursor-pointer',
+                          win.fontFamily === 'mono' ? 'bg-primary/10 text-primary border-primary/40' : 'bg-surface text-muted hover:text-foreground',
+                        )}
+                      >
+                        {win.fontFamily === 'mono' ? 'Monospace (Code)' : 'Sans-Serif (Text)'}
+                      </button>
+
+                      <div className="flex items-center rounded border border-border bg-surface text-[11px]">
+                        {(['sm', 'base', 'lg'] as const).map((sz, i) => (
+                          <button
+                            key={sz}
+                            type="button"
+                            onClick={() => updateWindow(win.windowId, { fontSize: sz })}
+                            className={cn(
+                              'px-2 py-1 transition-colors cursor-pointer',
+                              i === 0 && 'rounded-l',
+                              i === 2 && 'rounded-r',
+                              win.fontSize === sz ? 'bg-primary text-white' : 'text-muted hover:text-foreground',
+                            )}
+                          >
+                            {sz === 'sm' ? 'A-' : sz === 'lg' ? 'A+' : 'A'}
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => updateWindow(win.windowId, { wordWrap: !win.wordWrap })}
+                        className={cn(
+                          'rounded border border-border px-2 py-1 text-[11px] transition-colors cursor-pointer',
+                          win.wordWrap ? 'bg-primary/10 text-primary border-primary/40' : 'bg-surface text-muted hover:text-foreground',
+                        )}
+                      >
+                        {win.wordWrap ? 'Wrap: On' : 'Wrap: Off'}
+                      </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                      <Button
+                        variant="ghost"
+                        className="h-7 text-xs px-2"
+                        onClick={() => {
+                          navigator.clipboard.writeText(win.content)
+                          toast({ title: 'Seluruh teks catatan tersalin!', tone: 'success' })
+                        }}
+                      >
+                        <Copy className="mr-1 size-3" />
+                        Salin
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="h-7 text-xs px-2"
+                        onClick={() => handleDownloadWindow(win)}
+                      >
+                        <Download className="mr-1 size-3" />
+                        .txt
+                      </Button>
+                      <Button
+                        variant="primary"
+                        className="h-7 text-xs px-2.5 sm:px-3 shadow-xs"
+                        onClick={() => void handleSaveWindow(win.windowId, false)}
+                      >
+                        <Save className="mr-1 size-3.5" />
+                        Simpan
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Main Textarea Canvas */}
+                  <div className="relative flex-1 bg-surface-2/10 overflow-hidden flex">
+                    <textarea
+                      value={win.content}
+                      onChange={(e) => updateWindow(win.windowId, { content: e.target.value, isDirty: true })}
+                      placeholder="Tuliskan catatan panjang, kredensial, konfigurasi .env, endpoint API, atau dokumentasi di sini... (Gunakan Ctrl+S untuk menyimpan instan)"
+                      className={cn(
+                        'w-full h-full p-4 sm:p-5 bg-transparent text-foreground resize-none focus:outline-hidden border-none overflow-y-auto leading-relaxed',
+                        win.fontFamily === 'mono' ? 'font-mono' : 'font-sans',
+                        win.fontSize === 'sm' ? 'text-xs' : win.fontSize === 'lg' ? 'text-base' : 'text-sm',
+                        win.wordWrap ? 'whitespace-pre-wrap' : 'whitespace-pre overflow-x-auto',
+                      )}
+                      autoFocus={isActive}
+                      spellCheck={false}
+                    />
+                  </div>
+
+                  {/* Notepad Status Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border bg-surface-2/50 px-3 py-1.5 text-[11px] text-muted select-none sm:px-4">
+                    <div className="flex items-center gap-3">
+                      <span>Baris: {win.content.split('\n').length}</span>
+                      <span>Kata: {win.content.trim() ? win.content.trim().split(/\s+/).length : 0}</span>
+                      <span>Karakter: {win.content.length}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="hidden sm:inline-block">
+                        Pintasan: <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">Ctrl+S</kbd> Simpan · <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">Esc</kbd> Tutup
+                      </span>
+                      <span>
+                        Diperbarui: {new Date(win.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Dialog Konfirmasi Unsaved Changes saat Menutup Jendela */}
+                  {win.confirmCloseOpen && (
+                    <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/65 backdrop-blur-xs p-4">
+                      <div className="w-full max-w-md rounded-xl border border-border bg-surface p-5 shadow-2xl space-y-4">
+                        <div className="space-y-1.5">
+                          <h4 className="text-base font-bold text-foreground">
+                            Simpan perubahan pada &quot;{win.title || 'Catatan'}&quot;?
+                          </h4>
+                          <p className="text-xs text-muted leading-relaxed">
+                            Catatan ini telah diubah dan belum disimpan. Pilih tindakan sebelum menutup jendela:
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 pt-1">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => updateWindow(win.windowId, { confirmCloseOpen: false })}
+                          >
+                            Batal
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => forceCloseWindow(win.windowId)}
+                          >
+                            Jangan Simpan
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => void handleSaveWindow(win.windowId, true)}
+                          >
+                            Simpan
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <span className="hidden sm:inline-block">Pintasan: <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">Ctrl+S</kbd> Simpan · <kbd className="px-1.5 py-0.5 rounded bg-surface border border-border text-[10px]">Esc</kbd> Tutup</span>
-                <span>Diperbarui: {new Date(notepadNote.updatedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</span>
-              </div>
+            )
+          })}
+
+          {/* Multi-Window Dock Bar di Bagian Bawah */}
+          <div className="fixed bottom-14 sm:bottom-3 left-2 right-2 z-[95] pointer-events-none flex justify-center">
+            <div className="pointer-events-auto flex max-w-full items-center gap-1.5 overflow-x-auto rounded-xl border border-border bg-surface/95 px-2.5 py-1.5 shadow-xl backdrop-blur-md">
+              <span className="hidden sm:inline-block px-1.5 text-[11px] font-semibold text-muted whitespace-nowrap">
+                Jendela ({openWindows.length}):
+              </span>
+              {openWindows.map((w) => {
+                const isActive = activeWindowId === w.windowId && !w.minimized
+                return (
+                  <div
+                    key={w.windowId}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors shrink-0',
+                      isActive
+                        ? 'border-primary/60 bg-primary/15 text-primary font-semibold'
+                        : 'border-border bg-surface-2/60 text-muted hover:text-foreground',
+                    )}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => focusWindow(w.windowId)}
+                      className="inline-flex items-center gap-1.5 max-w-[140px] truncate cursor-pointer"
+                    >
+                      {w.isDirty && <span className="size-2 rounded-full bg-amber-500 shrink-0" title="Belum disimpan" />}
+                      <span className="truncate">{w.title || 'Catatan'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => requestCloseWindow(w.windowId)}
+                      className="rounded p-0.5 text-muted hover:text-danger cursor-pointer"
+                      title="Tutup tab catatan"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                )
+              })}
+              {openWindows.length > 1 && (
+                <button
+                  type="button"
+                  onClick={requestCloseAllWindows}
+                  className="ml-1 rounded-lg border border-border/80 bg-surface-2/40 px-2 py-1 text-[11px] text-muted hover:text-danger whitespace-nowrap cursor-pointer"
+                >
+                  Tutup Semua
+                </button>
+              )}
             </div>
           </div>
-        </div>,
-        document.body
+        </>,
+        document.body,
       )}
     </div>
   )

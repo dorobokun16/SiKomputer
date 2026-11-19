@@ -215,14 +215,10 @@ export const sessions = [
 
 /* ---------- Toolbox ---------- */
 export const toolboxTools = [
-  { id: 'json', name: 'JSON Formatter', desc: 'Format, validasi, dan minify JSON' },
   { id: 'jwt', name: 'JWT Decoder', desc: 'Bedah header dan payload token' },
-  { id: 'regex', name: 'Regex Tester', desc: 'Uji pola dengan highlight hasil' },
-  { id: 'replace', name: 'Text Replace', desc: 'Cari & ganti teks, batch replace, regex, dan match count' },
   { id: 'sql', name: 'SQL Generator', desc: 'Auto-generate SELECT, INSERT, UPDATE, DELETE & DDL' },
   { id: 'cron', name: 'Cron Builder', desc: 'Susun dan jelaskan jadwal cron' },
   { id: 'uuid', name: 'UUID & Hash', desc: 'Buat UUID, MD5, SHA-256' },
   { id: 'epoch', name: 'Epoch Converter', desc: 'Timestamp ke tanggal, dan sebaliknya' },
-  { id: 'diff', name: 'Text Diff', desc: 'Bandingkan dua teks berdampingan' },
 ] as const
 

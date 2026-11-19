@@ -213,3 +213,224 @@ export async function repairPdf(file: File, opts: PdfRepairOptions): Promise<Pdf
     throw friendlyError(e)
   }
 }
+
+/* ================= PDF Inspect, Split & Merge ================= */
+
+export async function inspectPdfFile(
+  file: File,
+): Promise<{ pageCount: number; sizeBytes: number; fileName: string }> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  if (!looksLikePdf(bytes)) {
+    throw new Error(`Berkas "${file.name}" bukan PDF yang valid (%PDF- tidak ditemukan).`)
+  }
+  try {
+    const { PDFDocument } = await import('pdf-lib')
+    const doc = await PDFDocument.load(bytes, { throwOnInvalidObject: false, updateMetadata: false })
+    return { pageCount: doc.getPageCount(), sizeBytes: file.size, fileName: file.name }
+  } catch (err) {
+    try {
+      const n = await countPages(bytes)
+      return { pageCount: n, sizeBytes: file.size, fileName: file.name }
+    } catch {
+      throw friendlyError(err)
+    }
+  }
+}
+
+export function parsePageRanges(rangeStr: string, maxPage: number): number[][] {
+  const clean = rangeStr.trim()
+  if (!clean || /^all|semua$/i.test(clean)) {
+    return [Array.from({ length: maxPage }, (_, i) => i + 1)]
+  }
+  const tokens = clean
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  if (tokens.length === 0) {
+    throw new Error('Masukkan nomor halaman atau rentang halaman (contoh: 1-3, 5).')
+  }
+
+  const groups: number[][] = []
+  for (const tok of tokens) {
+    const rangeMatch = tok.match(/^(\d+)\s*-\s*(\d+)$/)
+    if (rangeMatch) {
+      const start = Number(rangeMatch[1])
+      const end = Number(rangeMatch[2])
+      if (start < 1 || end < 1 || start > maxPage || end > maxPage) {
+        throw new Error(`Rentang "${tok}" di luar jumlah halaman dokumen (1–${maxPage}).`)
+      }
+      const pages: number[] = []
+      if (start <= end) {
+        for (let p = start; p <= end; p++) pages.push(p)
+      } else {
+        for (let p = start; p >= end; p--) pages.push(p)
+      }
+      groups.push(pages)
+    } else if (/^\d+$/.test(tok)) {
+      const p = Number(tok)
+      if (p < 1 || p > maxPage) {
+        throw new Error(`Halaman "${p}" di luar batas dokumen (1–${maxPage}).`)
+      }
+      groups.push([p])
+    } else {
+      throw new Error(`Format rentang "${tok}" tidak dikenali. Gunakan angka atau a-b (contoh: 1-3, 5).`)
+    }
+  }
+  return groups
+}
+
+export type PdfSplitMode = 'extract-single' | 'split-ranges' | 'every-n' | 'remove-pages'
+
+export type PdfSplitItem = {
+  fileName: string
+  blob: Blob
+  pages: number
+  pageNumbers: number[]
+  sizeBytes: number
+}
+
+export async function splitPdf(
+  file: File,
+  opts: {
+    mode: PdfSplitMode
+    rangeInput?: string
+    chunkSize?: number
+    onProgress?: (done: number, total: number, label: string) => void
+  },
+): Promise<PdfSplitItem[]> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  if (!looksLikePdf(bytes)) throw new Error('Berkas ini bukan PDF (header %PDF- tidak ditemukan).')
+
+  const { PDFDocument } = await import('pdf-lib')
+  const src = await PDFDocument.load(bytes, { throwOnInvalidObject: false, updateMetadata: false })
+  const total = src.getPageCount()
+  const baseName = file.name.replace(/\.pdf$/i, '')
+
+  let groups: number[][] = []
+  if (opts.mode === 'every-n') {
+    const step = Math.max(1, Math.min(total, opts.chunkSize || 1))
+    for (let start = 1; start <= total; start += step) {
+      const g: number[] = []
+      for (let p = start; p < Math.min(total + 1, start + step); p++) g.push(p)
+      groups.push(g)
+    }
+  } else if (opts.mode === 'remove-pages') {
+    const parsed = parsePageRanges(opts.rangeInput || '', total)
+    const toRemove = new Set(parsed.flat())
+    const kept: number[] = []
+    for (let p = 1; p <= total; p++) {
+      if (!toRemove.has(p)) kept.push(p)
+    }
+    if (kept.length === 0) {
+      throw new Error('Tidak ada halaman tersisa jika semua halaman dihapus.')
+    }
+    groups = [kept]
+  } else if (opts.mode === 'extract-single') {
+    const parsed = parsePageRanges(opts.rangeInput || `1-${total}`, total)
+    groups = [parsed.flat()]
+  } else {
+    // split-ranges: setiap bagian dipisah menjadi file terpisah
+    groups = parsePageRanges(opts.rangeInput || `1-${total}`, total)
+  }
+
+  const outputs: PdfSplitItem[] = []
+  for (let idx = 0; idx < groups.length; idx++) {
+    const pageNums = groups[idx]
+    opts.onProgress?.(idx, groups.length, `Membuat berkas ${idx + 1}/${groups.length}...`)
+
+    const dst = await PDFDocument.create()
+    const copiedPages = await dst.copyPages(
+      src,
+      pageNums.map((p) => p - 1),
+    )
+    for (const page of copiedPages) dst.addPage(page)
+    dst.setProducer('SiKomputer PDF Studio')
+
+    const out = await dst.save({ useObjectStreams: false })
+    const copy = new Uint8Array(out)
+    const labelSuffix =
+      pageNums.length === 1
+        ? `hal-${pageNums[0]}`
+        : `hal-${pageNums[0]}-${pageNums[pageNums.length - 1]}`
+    const fileName =
+      groups.length === 1 && opts.mode === 'remove-pages'
+        ? `${baseName}-trimmed.pdf`
+        : `${baseName}-${labelSuffix}.pdf`
+
+    outputs.push({
+      fileName,
+      blob: new Blob([copy], { type: 'application/pdf' }),
+      pages: pageNums.length,
+      pageNumbers: pageNums,
+      sizeBytes: copy.byteLength,
+    })
+    opts.onProgress?.(idx + 1, groups.length, `Selesai ${idx + 1}/${groups.length}`)
+  }
+
+  return outputs
+}
+
+export type PdfMergeInputItem = {
+  id: string
+  file: File
+  pageCount: number
+  rangeStr: string
+}
+
+export async function mergePdfs(
+  items: PdfMergeInputItem[],
+  outputFileName = 'dokumen-gabungan.pdf',
+  onProgress?: (done: number, total: number, label: string) => void,
+): Promise<{
+  blob: Blob
+  fileName: string
+  totalPages: number
+  sizeBefore: number
+  sizeAfter: number
+}> {
+  if (items.length < 2) {
+    throw new Error('Tambahkan minimal 2 berkas PDF untuk digabungkan.')
+  }
+
+  const { PDFDocument } = await import('pdf-lib')
+  const dst = await PDFDocument.create()
+  let totalPages = 0
+  let sizeBefore = 0
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]
+    sizeBefore += item.file.size
+    onProgress?.(i, items.length, `Menggabungkan ${item.file.name} (${i + 1}/${items.length})...`)
+
+    const bytes = new Uint8Array(await item.file.arrayBuffer())
+    if (!looksLikePdf(bytes)) {
+      throw new Error(`Berkas "${item.file.name}" bukan PDF yang valid.`)
+    }
+    const src = await PDFDocument.load(bytes, { throwOnInvalidObject: false, updateMetadata: false })
+    const count = src.getPageCount()
+    const indices = item.rangeStr.trim()
+      ? parsePageRanges(item.rangeStr, count)
+          .flat()
+          .map((p) => p - 1)
+      : Array.from({ length: count }, (_, idx) => idx)
+
+    const copied = await dst.copyPages(src, indices)
+    for (const p of copied) dst.addPage(p)
+    totalPages += copied.length
+    onProgress?.(i + 1, items.length, `Selesai membaca ${item.file.name}`)
+  }
+
+  dst.setProducer('SiKomputer PDF Studio')
+  const out = await dst.save({ useObjectStreams: false })
+  const copy = new Uint8Array(out)
+  const cleanName = outputFileName.trim() || 'dokumen-gabungan.pdf'
+  const finalName = /\.pdf$/i.test(cleanName) ? cleanName : `${cleanName}.pdf`
+
+  return {
+    blob: new Blob([copy], { type: 'application/pdf' }),
+    fileName: finalName,
+    totalPages,
+    sizeBefore,
+    sizeAfter: copy.byteLength,
+  }
+}

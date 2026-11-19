@@ -26,6 +26,7 @@ def main():
     mac_template = os.path.join(scripts_dir, "macos", "SiKomputer.app")
     pub_dl_dir = os.path.join(root, "public", "downloads")
     android_dir = os.path.join(root, "android")
+    doc_dir = os.path.join(root, "dokumentasi")
 
     if not os.path.isdir(dist_dir):
         raise FileNotFoundError("dist/ tidak ditemukan. Jalankan 'npm run build' terlebih dahulu.")
@@ -72,6 +73,7 @@ def main():
                             rel_path = os.path.relpath(full_path, clean_web).replace("\\", "/")
                             zf.write(full_path, rel_path)
             if "web" in targets:
+                shutil.copy2(web_dist_zip, os.path.join(dist_dl_dir, "SiKomputer-web-dist.zip"))
                 print(f"1. SiKomputer-web-dist.zip siap ({os.path.getsize(web_dist_zip)} bytes)")
 
             if "exe" in targets:
@@ -92,6 +94,8 @@ def main():
                         print("CSC Output:", res_exe.stdout, res_exe.stderr)
                         raise SystemExit(1)
                     shutil.copy2(exe_out, os.path.join(dist_dl_dir, "SiKomputer.exe"))
+                    if os.path.isdir(doc_dir):
+                        shutil.copy2(exe_out, os.path.join(doc_dir, "SiKomputer.exe"))
                     print(f"2. SiKomputer.exe siap ({os.path.getsize(exe_out)} bytes)")
                 else:
                     print("2. Lewati build SiKomputer.exe (bukan Windows csc.exe).")
@@ -136,6 +140,18 @@ def main():
                             with open(full_path, "rb") as fp:
                                 zf.writestr(zinfo, fp.read())
                 shutil.copy2(mac_zip_out, os.path.join(dist_dl_dir, "SiKomputer-macOS.zip"))
+                if os.path.isdir(doc_dir):
+                    shutil.copy2(mac_zip_out, os.path.join(doc_dir, "SiKomputer-macOS.zip"))
+                    doc_mac_app = os.path.join(doc_dir, "SiKomputer.app")
+                    if os.path.isdir(doc_mac_app):
+                        if os.path.exists(plist_path):
+                            shutil.copy2(plist_path, os.path.join(doc_mac_app, "Contents", "Info.plist"))
+                        doc_mac_web = os.path.join(doc_mac_app, "Contents", "Resources", "web")
+                        if os.path.exists(doc_mac_web):
+                            shutil.rmtree(doc_mac_web)
+                        shutil.copytree(clean_web, doc_mac_web)
+                    else:
+                        shutil.copytree(mac_stage, doc_mac_app)
                 print(f"3. SiKomputer-macOS.zip siap ({os.path.getsize(mac_zip_out)} bytes)")
 
     if "apk" in targets:
@@ -184,6 +200,8 @@ def main():
             apk_out = os.path.join(pub_dl_dir, "SiKomputer.apk")
             shutil.copy2(apk_src, apk_out)
             shutil.copy2(apk_out, os.path.join(dist_dl_dir, "SiKomputer.apk"))
+            if os.path.isdir(doc_dir):
+                shutil.copy2(apk_out, os.path.join(doc_dir, "SiKomputer.apk"))
             print(f"4. SiKomputer.apk siap ({os.path.getsize(apk_out)} bytes)")
         else:
             raise FileNotFoundError(f"Android SDK tidak ditemukan di: {sdk_home}")

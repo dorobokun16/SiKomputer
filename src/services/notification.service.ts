@@ -27,7 +27,7 @@ const DEFAULT_NOTIFICATIONS: Omit<InAppNotification, 'id'>[] = [
     body: 'Pindai berkas Excel RPA monitoring dan dapatkan format chat siap salin.',
     tone: 'info',
     unread: false,
-    link: '/dev/rpa-monitoring',
+    link: '/personal/rpa-monitoring',
     createdAt: new Date(Date.now() - 7200000).toISOString(),
   },
 ]

@@ -25,19 +25,21 @@ async function auditMobile() {
     const routes = [
       { path: '/', name: '01-dashboard' },
       { path: '/dev/base64', name: '02-base64' },
-      { path: '/dev/pdf-repair', name: '03-pdf-repair' },
+      { path: '/dev/pdf-studio', name: '03-pdf-studio' },
       { path: '/dev/image-studio', name: '04-image-studio' },
       { path: '/dev/spreadsheet', name: '05-spreadsheet' },
-      { path: '/dev/rpa-monitoring', name: '06-rpa-monitoring' },
-      { path: '/dev/api-tester', name: '07-api-tester' },
-      { path: '/productivity/tasks', name: '08-tasks' },
-      { path: '/productivity/backlog', name: '09-backlog' },
-      { path: '/productivity/reminders', name: '10-reminders' },
-      { path: '/productivity/notes', name: '11-notes' },
-      { path: '/productivity/date-calc', name: '12-date-calc' },
-      { path: '/tools/toolbox', name: '13-toolbox' },
-      { path: '/tools/vault', name: '14-vault' },
-      { path: '/settings', name: '15-settings' },
+      { path: '/dev/text-studio', name: '06-text-studio' },
+      { path: '/dev/qr-studio', name: '07-qr-studio' },
+      { path: '/dev/api-tester', name: '08-api-tester' },
+      { path: '/personal/rpa-monitoring', name: '09-rpa-monitoring' },
+      { path: '/productivity/tasks', name: '10-tasks' },
+      { path: '/productivity/backlog', name: '11-backlog' },
+      { path: '/productivity/reminders', name: '12-reminders' },
+      { path: '/productivity/notes', name: '13-notes' },
+      { path: '/productivity/date-calc', name: '14-date-calc' },
+      { path: '/tools/toolbox', name: '15-toolbox' },
+      { path: '/tools/vault', name: '16-vault' },
+      { path: '/settings', name: '17-settings' },
     ];
 
     for (const r of routes) {
@@ -85,7 +87,7 @@ async function auditMobile() {
       await page.screenshot({ path: path.join(SHOTS, `${r.name}.png`), fullPage: false });
     }
 
-    // Also test Dev Toolbox SQL Generator + Text Replace on mobile
+    // Also test Dev Toolbox SQL Generator + Text Studio URL Parser on mobile
     await page.goto(`${BASE}/tools/toolbox`, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 400));
     await page.evaluate(() => {
@@ -93,9 +95,20 @@ async function auditMobile() {
       if (btn) btn.click();
     });
     await new Promise((r) => setTimeout(r, 400));
-    await page.screenshot({ path: path.join(SHOTS, '16-toolbox-sql.png') });
+    await page.screenshot({ path: path.join(SHOTS, '18-toolbox-sql.png') });
     const sqlSw = await page.evaluate(() => document.documentElement.scrollWidth);
-    console.log('16-toolbox-sql       | sw=' + sqlSw + ' vw=375');
+    console.log('18-toolbox-sql       | sw=' + sqlSw + ' vw=375');
+
+    await page.goto(`${BASE}/dev/text-studio`, { waitUntil: 'networkidle0' });
+    await new Promise((r) => setTimeout(r, 400));
+    await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll('button')).find((b) => b.innerText.includes('URL & Query'));
+      if (btn) btn.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    await page.screenshot({ path: path.join(SHOTS, '19-text-studio-url.png') });
+    const urlSw = await page.evaluate(() => document.documentElement.scrollWidth);
+    console.log('19-text-studio-url   | sw=' + urlSw + ' vw=375');
 
     // Also test Settings -> PWA tab on mobile
     await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle0' });
@@ -105,7 +118,7 @@ async function auditMobile() {
       if (btn) btn.click();
     });
     await new Promise((r) => setTimeout(r, 400));
-    await page.screenshot({ path: path.join(SHOTS, '17-settings-pwa.png') });
+    await page.screenshot({ path: path.join(SHOTS, '20-settings-pwa.png') });
   } finally {
     await browser.close();
   }

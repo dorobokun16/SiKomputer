@@ -1,11 +1,10 @@
 import {
   ArrowLeft,
-  ArrowRightLeft,
   Braces,
-  CheckCircle2,
   Clock,
   Copy,
   Download,
+  FileCode2,
   Plus,
   RefreshCw,
   Search,
@@ -14,22 +13,17 @@ import {
   Trash,
   Trash2,
   Wrench,
-  XCircle,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { db, type SnippetEntity } from '@/db/dexie'
 import { toolboxTools } from '@/mocks'
 import {
-  formatJson,
-  minifyJson,
   decodeJwt,
-  testRegex,
   explainCron,
   generateUuids,
   calculateHashes,
   epochToDates,
-  computeTextDiff,
-  executeTextReplace,
   generateSqlCode,
   type SqlAction,
   type SqlDialect,
@@ -51,7 +45,7 @@ import { CodeBlock, PageHeader } from '@/components/ui/blocks'
 import { cn } from '@/lib/cn'
 
 /* =========================================================================
-   1. DEV TOOLBOX (7 PERKAKAS CEPAT)
+   1. DEV TOOLBOX (5 PERKAKAS CEPAT)
    ========================================================================= */
 
 export function ToolboxPage() {
@@ -59,53 +53,24 @@ export function ToolboxPage() {
   const [sel, setSel] = useState<string | null>(null)
   const tool = toolboxTools.find((t) => t.id === sel)
 
-  // 1. JSON State
-  const [jsonInput, setJsonInput] = useState(
-    '{\n  "app": "SiKomputer",\n  "version": "1.0.0",\n  "features": ["Base64", "API Tester", "MoM AI", "Toolbox"],\n  "isOffline": true\n}',
-  )
-  const [jsonOutput, setJsonOutput] = useState('')
-  const [jsonError, setJsonError] = useState<string | null>(null)
-
-  // 2. JWT State
+  // 1. JWT State
   const [jwtInput, setJwtInput] = useState(
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6Ikl3YW4gS3Vybmlhd2FuIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
   )
   const [jwtDecoded, setJwtDecoded] = useState<any>(null)
 
-  // 3. Regex State
-  const [regexPattern, setRegexPattern] = useState('[\\w.-]+@[\\w.-]+\\.[A-Za-z]{2,}')
-  const [regexFlags, setRegexFlags] = useState('g')
-  const [regexText, setRegexText] = useState(
-    'Halo, silakan hubungi tim kami di support@sikomputer.app atau admin@kantor.co.id untuk info lebih lanjut.',
-  )
-
-  // 4. Cron State
+  // 2. Cron State
   const [cronInput, setCronInput] = useState('0 9 * * 1-5')
 
-  // 5. UUID & Hash State
+  // 3. UUID & Hash State
   const [hashInput, setHashInput] = useState('sikomputer-2026')
   const [hashes, setHashes] = useState({ md5: '', sha1: '', sha256: '', sha512: '' })
   const [generatedUuids, setGeneratedUuids] = useState<string[]>(() => generateUuids(5))
 
-  // 6. Epoch State
+  // 4. Epoch State
   const [epochInput, setEpochInput] = useState(String(Math.floor(Date.now() / 1000)))
 
-  // 7. Text Diff State
-  const [diffOrig, setDiffOrig] = useState('baris pertama\nbaris kedua konfigurasi lama\nbaris ketiga tetap')
-  const [diffMod, setDiffMod] = useState('baris pertama\nbaris kedua konfigurasi BARU (diupdate)\nbaris ketiga tetap\nbaris keempat tambahan')
-
-  // 8. Text Replace State
-  const [replaceSource, setReplaceSource] = useState(
-    `Update monitoring robot PA status : \n\nROB-065, 1 Hours ago\nIssue: Cloud connector call failed with status code '429'.\n> Action: Rerun jobs\n\nROB-206, 3 Hours ago\nIssue: Cloud connector call failed with status code '429'.\n> Action: Rerun dispatcher\n\nROB-269, 1 Hours ago\nIssue: Unable to login to Jarvis website.\n> Action: Rerun jobs`
-  )
-  const [findText, setFindText] = useState('Cloud connector call failed')
-  const [replaceWith, setReplaceWith] = useState('Gateway Timeout 504')
-  const [matchCase, setMatchCase] = useState(false)
-  const [wholeWord, setWholeWord] = useState(false)
-  const [useRegex, setUseRegex] = useState(false)
-  const [replaceOutput, setReplaceOutput] = useState('')
-
-  // 9. SQL Generator State
+  // 5. SQL Generator State
   const [sqlTable, setSqlTable] = useState('robot_monitoring_logs')
   const [sqlAction, setSqlAction] = useState<SqlAction>('SELECT')
   const [sqlDialect, setSqlDialect] = useState<SqlDialect>('postgres')
@@ -123,39 +88,33 @@ export function ToolboxPage() {
 
   // Effect untuk update perkakas yang aktif
   useEffect(() => {
-    if (sel === 'json') {
-      const res = formatJson(jsonInput, 2)
-      setJsonOutput(res.formatted)
-      setJsonError(res.error || null)
-    } else if (sel === 'jwt') {
+    if (sel === 'jwt') {
       setJwtDecoded(decodeJwt(jwtInput))
     } else if (sel === 'uuid') {
       void calculateHashes(hashInput).then(setHashes)
-    } else if (sel === 'replace') {
-      const res = executeTextReplace(replaceSource, {
-        findText,
-        replaceText: replaceWith,
-        matchCase,
-        wholeWord,
-        useRegex,
-      })
-      setReplaceOutput(res.result)
     }
-  }, [sel, jsonInput, jwtInput, hashInput, replaceSource, findText, replaceWith, matchCase, wholeWord, useRegex])
+  }, [sel, jwtInput, hashInput])
 
   return (
     <>
       <PageHeader
         title="Dev Toolbox"
-        description="Kumpulan 9 utilitas cepat pengembang harian — 100% diproses di browser tanpa server luar"
+        description="Kumpulan 5 utilitas pengembang (JWT, SQL Generator, Cron, UUID/Hash, Epoch) — 100% diproses di browser"
         icon={<Wrench className="size-5" />}
         color="var(--mod-dev)"
         actions={
-          sel && (
-            <Button icon={<ArrowLeft className="size-4" />} onClick={() => setSel(null)}>
-              Semua Tool
-            </Button>
-          )
+          <div className="flex flex-wrap items-center gap-2">
+            <Link to="/dev/text-studio">
+              <Button variant="secondary" icon={<FileCode2 className="size-4" />}>
+                Buka Text Studio ↗
+              </Button>
+            </Link>
+            {sel && (
+              <Button icon={<ArrowLeft className="size-4" />} onClick={() => setSel(null)}>
+                Semua Tool
+              </Button>
+            )}
+          </div>
         }
       />
 
@@ -177,78 +136,6 @@ export function ToolboxPage() {
         </div>
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
-          {/* ================= 1. TOOL: JSON FORMATTER ================= */}
-          {sel === 'json' && (
-            <>
-              <Card>
-                <CardHeader title="Input JSON Mentah" subtitle="Indentasi, validasi, dan minifikasi instan" />
-                <div className="space-y-3 p-4">
-                  <Textarea
-                    mono
-                    className="min-h-72 font-mono text-xs"
-                    value={jsonInput}
-                    onChange={(e) => setJsonInput(e.target.value)}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      onClick={() => {
-                        const res = formatJson(jsonInput, 2)
-                        setJsonOutput(res.formatted)
-                        setJsonError(res.error || null)
-                        if (res.isValid) toast({ title: 'JSON diformat dengan rapi' })
-                      }}
-                    >
-                      Prettify (Indent 2)
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        const res = minifyJson(jsonInput)
-                        setJsonOutput(res.minified)
-                        setJsonError(res.error || null)
-                        if (res.isValid) toast({ title: 'JSON diminifikasi' })
-                      }}
-                    >
-                      Minify (Satu Baris)
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setJsonInput('')}>
-                      Bersihkan
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-
-              <Card>
-                <CardHeader
-                  title="Hasil Validasi JSON"
-                  action={
-                    !jsonError ? (
-                      <Badge tone="success">
-                        <CheckCircle2 className="size-3" />
-                        Valid
-                      </Badge>
-                    ) : (
-                      <Badge tone="danger">
-                        <XCircle className="size-3" />
-                        Sintaks Error
-                      </Badge>
-                    )
-                  }
-                />
-                <div className="p-4 space-y-3">
-                  {jsonError ? (
-                    <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-xs text-danger font-mono">
-                      {jsonError}
-                    </div>
-                  ) : null}
-                  <CodeBlock label="json" code={jsonOutput} maxHeight={340} />
-                </div>
-              </Card>
-            </>
-          )}
 
           {/* ================= 2. TOOL: JWT DECODER ================= */}
           {sel === 'jwt' && (
@@ -331,90 +218,6 @@ export function ToolboxPage() {
               </Card>
             </>
           )}
-
-          {/* ================= 3. TOOL: REGEX TESTER ================= */}
-          {sel === 'regex' && (() => {
-            const regexRes = testRegex(regexPattern, regexFlags, regexText)
-            return (
-              <>
-                <Card>
-                  <CardHeader title="Pengaturan Pola Regex" />
-                  <div className="space-y-4 p-4">
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="col-span-2">
-                        <Field label="Pola Ekspresi Reguler">
-                          <Input
-                            value={regexPattern}
-                            onChange={(e) => setRegexPattern(e.target.value)}
-                            className="font-mono text-xs"
-                          />
-                        </Field>
-                      </div>
-                      <div>
-                        <Field label="Flags">
-                          <Input
-                            value={regexFlags}
-                            onChange={(e) => setRegexFlags(e.target.value)}
-                            placeholder="g, i, m"
-                            className="font-mono text-xs"
-                          />
-                        </Field>
-                      </div>
-                    </div>
-
-                    <Field label="Teks Uji untuk Pencocokan">
-                      <Textarea
-                        mono
-                        className="min-h-48 font-mono text-xs"
-                        value={regexText}
-                        onChange={(e) => setRegexText(e.target.value)}
-                      />
-                    </Field>
-                  </div>
-                </Card>
-
-                <Card>
-                  <CardHeader
-                    title="Hasil Pencocokan"
-                    action={
-                      <Badge tone={regexRes.count > 0 ? 'success' : 'neutral'}>
-                        {regexRes.count} Cocok
-                      </Badge>
-                    }
-                  />
-                  <div className="p-4 space-y-3 max-h-96 overflow-y-auto">
-                    {regexRes.error ? (
-                      <div className="p-3 text-xs text-danger bg-danger/10 border border-danger/30 rounded-md">
-                        {regexRes.error}
-                      </div>
-                    ) : regexRes.matches.length > 0 ? (
-                      regexRes.matches.map((m, idx) => (
-                        <div
-                          key={idx}
-                          className="p-2.5 rounded border border-border bg-surface-2 text-xs font-mono space-y-1"
-                        >
-                          <div className="flex justify-between text-muted text-[10px]">
-                            <span>Match #{idx + 1}</span>
-                            <span>Indeks: {m.index}</span>
-                          </div>
-                          <p className="font-semibold text-primary">{m.match}</p>
-                          {m.groups.length > 0 && (
-                            <p className="text-muted text-[11px]">
-                              Grup: {m.groups.join(', ')}
-                            </p>
-                          )}
-                        </div>
-                      ))
-                    ) : (
-                      <p className="py-12 text-center text-xs text-muted">
-                        Tidak ada teks yang cocok dengan pola regex di atas.
-                      </p>
-                    )}
-                  </div>
-                </Card>
-              </>
-            )
-          })()}
 
           {/* ================= 4. TOOL: CRON BUILDER ================= */}
           {sel === 'cron' && (() => {
@@ -620,273 +423,7 @@ export function ToolboxPage() {
             )
           })()}
 
-          {/* ================= 7. TOOL: TEXT DIFF ================= */}
-          {sel === 'diff' && (() => {
-            const diffLines = computeTextDiff(diffOrig, diffMod)
-            return (
-              <>
-                <Card>
-                  <CardHeader title="Input Dua Teks" />
-                  <div className="p-4 space-y-3">
-                    <Field label="Teks Asli (Original)">
-                      <Textarea
-                        mono
-                        className="min-h-36 font-mono text-xs"
-                        value={diffOrig}
-                        onChange={(e) => setDiffOrig(e.target.value)}
-                      />
-                    </Field>
-                    <Field label="Teks Baru (Modified)">
-                      <Textarea
-                        mono
-                        className="min-h-36 font-mono text-xs"
-                        value={diffMod}
-                        onChange={(e) => setDiffMod(e.target.value)}
-                      />
-                    </Field>
-                  </div>
-                </Card>
-
-                <Card>
-                  <CardHeader title="Hasil Perbandingan Baris (Diff)" />
-                  <div className="p-3 font-mono text-xs max-h-96 overflow-y-auto space-y-0.5">
-                    {diffLines.map((line, i) => (
-                      <div
-                        key={i}
-                        className={cn(
-                          'p-1 px-2 rounded flex items-start gap-2',
-                          line.type === 'added'
-                            ? 'bg-success/15 text-success'
-                            : line.type === 'removed'
-                              ? 'bg-danger/15 text-danger'
-                              : 'text-muted',
-                        )}
-                      >
-                        <span className="select-none font-bold shrink-0 w-3">
-                          {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
-                        </span>
-                        <span className="whitespace-pre-wrap">{line.text}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              </>
-            )
-          })()}
-
-          {/* ================= 8. TOOL: TEXT REPLACE ================= */}
-          {sel === 'replace' && (() => {
-            const replaceRes = executeTextReplace(replaceSource, {
-              findText,
-              replaceText: replaceWith,
-              matchCase,
-              wholeWord,
-              useRegex,
-            })
-
-            const handleSwap = () => {
-              setReplaceSource(replaceOutput || replaceRes.result)
-              toast({ title: 'Hasil ditukar menjadi teks input', tone: 'info' })
-            }
-
-            const handleReplaceFirst = () => {
-              const singleRes = executeTextReplace(
-                replaceSource,
-                { findText, replaceText: replaceWith, matchCase, wholeWord, useRegex },
-                'first'
-              )
-              setReplaceSource(singleRes.result)
-              toast({ title: '1 Kemunculan pertama diganti', tone: 'success' })
-            }
-
-            const handleReplaceAllNow = () => {
-              setReplaceSource(replaceRes.result)
-              toast({
-                title: `${replaceRes.matchCount} Kemunculan berhasil diganti`,
-                tone: 'success',
-              })
-            }
-
-            const handleLoadSample = () => {
-              setReplaceSource(
-                `Update monitoring robot PA status :\n\nROB-065, 1 Hours ago\nIssue: Cloud connector call failed with status code '429'.\n> Action: Rerun jobs\n\nROB-206, 3 Hours ago\nIssue: Cloud connector call failed with status code '429'.\n> Action: Rerun dispatcher\n\nROB-269, 1 Hours ago\nIssue: Unable to login to Jarvis website.\n> Action: Rerun jobs`
-              )
-              setFindText('Cloud connector call failed')
-              setReplaceWith('Gateway Connection Timeout')
-              toast({ title: 'Contoh teks RPA dimuat', tone: 'info' })
-            }
-
-            return (
-              <>
-                <Card>
-                  <CardHeader
-                    title="Cari & Ganti Teks (Find & Replace)"
-                    subtitle="Dukungan regex, kata utuh, dan sensitif huruf besar-kecil"
-                  />
-                  <div className="space-y-3 p-4">
-                    <Field label="Teks Input Sumber">
-                      <Textarea
-                        mono
-                        className="min-h-48 font-mono text-xs"
-                        placeholder="Ketik atau tempel teks yang ingin dicari/diganti di sini..."
-                        value={replaceSource}
-                        onChange={(e) => setReplaceSource(e.target.value)}
-                      />
-                    </Field>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <Field label="Cari Teks / Pola">
-                        <Input
-                          placeholder="Kata atau pola yang dicari..."
-                          value={findText}
-                          onChange={(e) => setFindText(e.target.value)}
-                          className="font-mono text-xs"
-                        />
-                      </Field>
-                      <Field label="Ganti Dengan">
-                        <Input
-                          placeholder="Teks pengganti baru..."
-                          value={replaceWith}
-                          onChange={(e) => setReplaceWith(e.target.value)}
-                          className="font-mono text-xs"
-                        />
-                      </Field>
-                    </div>
-
-                    {/* Options checkboxes */}
-                    <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-muted">
-                      <label className="flex items-center gap-1.5 cursor-pointer select-none rounded bg-surface-2 px-2.5 py-1 text-foreground hover:bg-surface-2/80">
-                        <input
-                          type="checkbox"
-                          checked={matchCase}
-                          onChange={(e) => setMatchCase(e.target.checked)}
-                          className="rounded border-border text-primary"
-                        />
-                        <span>Sensitif Huruf (Case Sensitive)</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer select-none rounded bg-surface-2 px-2.5 py-1 text-foreground hover:bg-surface-2/80">
-                        <input
-                          type="checkbox"
-                          checked={wholeWord}
-                          onChange={(e) => setWholeWord(e.target.checked)}
-                          className="rounded border-border text-primary"
-                        />
-                        <span>Kata Utuh (Whole Word)</span>
-                      </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer select-none rounded bg-surface-2 px-2.5 py-1 text-foreground hover:bg-surface-2/80">
-                        <input
-                          type="checkbox"
-                          checked={useRegex}
-                          onChange={(e) => setUseRegex(e.target.checked)}
-                          className="rounded border-border text-primary"
-                        />
-                        <span>Mode Regex</span>
-                      </label>
-                    </div>
-
-                    {replaceRes.error && (
-                      <div className="rounded border border-danger/30 bg-danger/10 p-2 text-xs text-danger">
-                        ⚠️ {replaceRes.error}
-                      </div>
-                    )}
-
-                    {/* Action buttons */}
-                    <div className="flex flex-wrap items-center gap-2 pt-2">
-                      <Button
-                        variant="primary"
-                        onClick={handleReplaceAllNow}
-                        disabled={!findText || replaceRes.matchCount === 0}
-                      >
-                        Ganti Semua ({replaceRes.matchCount})
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={handleReplaceFirst}
-                        disabled={!findText || replaceRes.matchCount === 0}
-                      >
-                        Ganti Pertama
-                      </Button>
-                      <Button variant="ghost" onClick={handleSwap}>
-                        <ArrowRightLeft className="mr-1.5 size-3.5" />
-                        Tukar ke Input
-                      </Button>
-                      <Button variant="ghost" onClick={handleLoadSample}>
-                        Contoh Teks
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        onClick={() => {
-                          setReplaceSource('')
-                          setFindText('')
-                          setReplaceWith('')
-                        }}
-                      >
-                        <Trash className="mr-1.5 size-3.5" />
-                        Bersihkan
-                      </Button>
-                    </div>
-                  </div>
-                </Card>
-
-                <Card>
-                  <CardHeader
-                    title="Hasil Pratinjau Teks (Live Output)"
-                    subtitle={`Ditemukan ${replaceRes.matchCount} kemunculan · ${replaceRes.result.length} karakter`}
-                  />
-                  <div className="space-y-3 p-4">
-                    <Textarea
-                      mono
-                      readOnly
-                      className="min-h-72 font-mono text-xs bg-surface-2/30"
-                      value={replaceRes.result}
-                    />
-
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-xs text-muted">
-                        {replaceRes.matchCount > 0 ? (
-                          <span className="text-success font-medium">
-                            ✓ {replaceRes.matchCount} bagian siap/telah diganti
-                          </span>
-                        ) : (
-                          'Tidak ada kecocokan yang ditemukan'
-                        )}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            navigator.clipboard.writeText(replaceRes.result)
-                            toast({ title: 'Hasil berhasil disalin ke clipboard', tone: 'success' })
-                          }}
-                        >
-                          <Copy className="mr-1.5 size-3.5" />
-                          Salin Hasil
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          onClick={() => {
-                            const blob = new Blob([replaceRes.result], { type: 'text/plain;charset=utf-8' })
-                            const url = URL.createObjectURL(blob)
-                            const a = document.createElement('a')
-                            a.href = url
-                            a.download = `replace-result-${Date.now()}.txt`
-                            a.click()
-                            URL.revokeObjectURL(url)
-                            toast({ title: 'File .txt diunduh', tone: 'success' })
-                          }}
-                        >
-                          <Download className="mr-1.5 size-3.5" />
-                          Unduh .txt
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              </>
-            )
-          })()}
-
-          {/* ================= 9. TOOL: SQL GENERATOR ================= */}
+          {/* ================= 5. TOOL: SQL GENERATOR ================= */}
           {sel === 'sql' && (() => {
             const sqlOutput = generateSqlCode({
               tableName: sqlTable,

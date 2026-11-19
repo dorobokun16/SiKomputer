@@ -4,6 +4,7 @@ import {
   Braces,
   CalendarClock,
   CalendarDays,
+  FileCode2,
   FileSpreadsheet,
   Images,
   KanbanSquare,
@@ -12,6 +13,7 @@ import {
   Lock,
   Palette,
   Printer,
+  QrCode,
   Send,
   Settings,
   Wrench,
@@ -43,10 +45,11 @@ export const navSections: NavSection[] = [
     title: 'Dev Utilities',
     items: [
       { path: '/dev/base64', label: 'Base64 Studio', description: 'Konversi teks dan berkas dua arah dengan Base64', icon: Binary, color: dev, emptyTitle: 'Belum ada input', emptyDesc: 'Ketik teks, tarik file, atau tempel string Base64.' },
-      { path: '/dev/pdf-repair', label: 'PDF Repair', description: 'Cetak ulang PDF untuk memperbaiki file rusak', icon: Printer, color: dev, emptyTitle: 'Belum ada PDF', emptyDesc: 'Pilih PDF yang gagal diupload untuk dicetak ulang.' },
+      { path: '/dev/text-studio', label: 'Text Studio', description: 'JSON Formatter, Regex, Text Replace, Diff, URL & Query Parser', icon: FileCode2, color: dev, emptyTitle: 'Belum ada teks', emptyDesc: 'Pilih perkakas teks di Text Studio.' },
+      { path: '/dev/pdf-studio', label: 'PDF Studio', description: 'PDF Repair, Split PDF, dan Merge PDF secara lokal', icon: Printer, color: dev, emptyTitle: 'Belum ada PDF', emptyDesc: 'Pilih berkas PDF untuk diperbaiki, dipecah, atau digabung.' },
+      { path: '/dev/qr-studio', label: 'QR Code Studio', description: 'Buat & kustomisasi QR Code untuk URL, Teks, Wi-Fi, dan vCard', icon: QrCode, color: dev, emptyTitle: 'Belum ada QR Code', emptyDesc: 'Masukkan URL, teks, atau detail Wi-Fi untuk membuat QR Code.' },
       { path: '/dev/image-studio', label: 'Image Studio', description: 'Kompres, ubah resolusi, dan edit gambar', icon: Images, color: dev, emptyTitle: 'Belum ada gambar', emptyDesc: 'Tarik satu atau beberapa gambar untuk diolah.' },
       { path: '/dev/spreadsheet', label: 'Konverter CSV & XLSX', description: 'Konversi dua arah CSV ke Excel dan sebaliknya', icon: FileSpreadsheet, color: dev, emptyTitle: 'Belum ada berkas', emptyDesc: 'Pilih CSV atau Excel untuk dikonversi.' },
-      { path: '/dev/rpa-monitoring', label: 'Monitoring RPA', description: 'Ekstrak status insiden robot dari Excel Monitoring', icon: Bot, color: dev, emptyTitle: 'Belum ada data', emptyDesc: 'Unggah berkas Monitoring.xlsx untuk mengekstrak laporan.' },
       { path: '/dev/api-tester', label: 'API Tester', description: 'Uji endpoint HTTP dengan cepat', icon: Send, color: dev, emptyTitle: 'Belum ada request', emptyDesc: 'Buat request pertama Anda atau impor dari cURL.' },
     ],
   },
@@ -63,8 +66,14 @@ export const navSections: NavSection[] = [
   {
     title: 'Tools',
     items: [
-      { path: '/tools/toolbox', label: 'Dev Toolbox', description: 'JSON, JWT, Regex, Cron, dan lainnya', icon: Wrench, color: dev, emptyTitle: 'Tidak ada tool', emptyDesc: 'Pilih salah satu tool dari daftar.' },
+      { path: '/tools/toolbox', label: 'Dev Toolbox', description: 'JWT Decoder, SQL Generator, Cron, UUID & Hash, Epoch', icon: Wrench, color: dev, emptyTitle: 'Tidak ada tool', emptyDesc: 'Pilih salah satu tool dari daftar.' },
       { path: '/tools/vault', label: 'Snippet & Prompt Vault', description: 'Simpan snippet, payload, dan prompt', icon: Braces, color: dev, emptyTitle: 'Vault kosong', emptyDesc: 'Simpan snippet atau prompt pertama Anda.' },
+    ],
+  },
+  {
+    title: 'Personal Features',
+    items: [
+      { path: '/personal/rpa-monitoring', label: 'Monitoring RPA', description: 'Ekstrak status insiden robot dari Excel Monitoring', icon: Bot, color: 'var(--primary)', emptyTitle: 'Belum ada data', emptyDesc: 'Unggah berkas Monitoring.xlsx untuk mengekstrak laporan.' },
     ],
   },
 ]

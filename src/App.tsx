@@ -14,6 +14,8 @@ import { ImageStudioPage } from '@/pages/ImageStudio'
 import { SpreadsheetConverterPage } from '@/pages/SpreadsheetConverter'
 import { RpaMonitoringPage } from '@/pages/RpaMonitoring'
 import { PdfRepairPage } from '@/pages/PdfRepair'
+import { TextStudioPage } from '@/pages/TextStudio'
+import { QrStudioPage } from '@/pages/QrStudio'
 import { NotesVaultPage } from '@/pages/NotesVault'
 import { DateCalculatorPage } from '@/pages/DateCalculator'
 
@@ -23,11 +25,15 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <DashboardPage /> },
       { path: '/dev/base64', element: <Base64Page /> },
+      { path: '/dev/text-studio', element: <TextStudioPage /> },
+      { path: '/dev/pdf-studio', element: <PdfRepairPage /> },
+      { path: '/dev/pdf-repair', element: <PdfRepairPage /> },
+      { path: '/dev/qr-studio', element: <QrStudioPage /> },
       { path: '/dev/image-studio', element: <ImageStudioPage /> },
       { path: '/dev/spreadsheet', element: <SpreadsheetConverterPage /> },
-      { path: '/dev/rpa-monitoring', element: <RpaMonitoringPage /> },
       { path: '/dev/api-tester', element: <ApiTesterPage /> },
-      { path: '/dev/pdf-repair', element: <PdfRepairPage /> },
+      { path: '/personal/rpa-monitoring', element: <RpaMonitoringPage /> },
+      { path: '/dev/rpa-monitoring', element: <RpaMonitoringPage /> },
       { path: '/productivity/tasks', element: <TasksPage /> },
       { path: '/productivity/backlog', element: <BacklogPage /> },
       { path: '/productivity/reminders', element: <RemindersPage /> },

@@ -848,3 +848,214 @@ export function generateSqlCode({
     }
   }
 }
+
+/* ================= 10. URL Encoder/Decoder & Query String Parser ================= */
+export type UrlCodecAction =
+  | 'encode-component'
+  | 'decode-component'
+  | 'encode-uri'
+  | 'decode-uri'
+  | 'encode-base64url'
+  | 'decode-base64url'
+
+export function encodeDecodeUrl(
+  input: string,
+  action: UrlCodecAction,
+  plusForSpace = false,
+): { output: string; isValid: boolean; error?: string } {
+  try {
+    if (!input) return { output: '', isValid: true }
+    switch (action) {
+      case 'encode-component': {
+        let out = encodeURIComponent(input)
+        if (plusForSpace) out = out.replace(/%20/g, '+')
+        return { output: out, isValid: true }
+      }
+      case 'decode-component': {
+        const prepared = plusForSpace ? input.replace(/\+/g, ' ') : input
+        return { output: decodeURIComponent(prepared), isValid: true }
+      }
+      case 'encode-uri': {
+        let out = encodeURI(input)
+        if (plusForSpace) out = out.replace(/%20/g, '+')
+        return { output: out, isValid: true }
+      }
+      case 'decode-uri': {
+        const prepared = plusForSpace ? input.replace(/\+/g, ' ') : input
+        return { output: decodeURI(prepared), isValid: true }
+      }
+      case 'encode-base64url': {
+        const bytes = new TextEncoder().encode(input)
+        let bin = ''
+        for (const b of bytes) bin += String.fromCharCode(b)
+        const b64url = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+        return { output: b64url, isValid: true }
+      }
+      case 'decode-base64url': {
+        let b64 = input.trim().replace(/-/g, '+').replace(/_/g, '/')
+        while (b64.length % 4) b64 += '='
+        const bin = atob(b64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        return { output: new TextDecoder('utf-8', { fatal: false }).decode(bytes), isValid: true }
+      }
+    }
+  } catch (err: unknown) {
+    return {
+      output: '',
+      isValid: false,
+      error: err instanceof Error ? err.message : 'String URL tidak valid / malformed URI.',
+    }
+  }
+}
+
+export interface QueryParamItem {
+  id: string
+  key: string
+  value: string
+  enabled: boolean
+}
+
+function makeParamId(): string {
+  return 'qp-' + Math.random().toString(36).slice(2, 9)
+}
+
+function safeDecodeQueryPart(part: string): string {
+  try {
+    return decodeURIComponent(part.replace(/\+/g, ' '))
+  } catch {
+    return part
+  }
+}
+
+export function parseUrlAndQuery(rawInput: string): {
+  isValidUrl: boolean
+  baseUrl: string
+  protocol: string
+  host: string
+  pathname: string
+  hash: string
+  params: QueryParamItem[]
+  jsonObject: Record<string, string | string[]>
+} {
+  const trimmed = rawInput.trim()
+  if (!trimmed) {
+    return {
+      isValidUrl: false,
+      baseUrl: '',
+      protocol: '',
+      host: '',
+      pathname: '',
+      hash: '',
+      params: [],
+      jsonObject: {},
+    }
+  }
+
+  let isValidUrl = false
+  let baseUrl = ''
+  let protocol = ''
+  let host = ''
+  let pathname = ''
+  let hash = ''
+  let rawQuery = ''
+
+  const looksLikeFullUrl = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)
+  if (looksLikeFullUrl) {
+    try {
+      const parsed = new URL(trimmed)
+      isValidUrl = true
+      protocol = parsed.protocol.replace(/:$/, '')
+      host = parsed.host
+      pathname = parsed.pathname
+      hash = parsed.hash
+      baseUrl = `${parsed.origin}${parsed.pathname}`
+      rawQuery = parsed.search.startsWith('?') ? parsed.search.slice(1) : parsed.search
+    } catch {
+      // Fallback ke parsing manual jika URL memiliki placeholder seperti {{token}}
+      const hashIdx = trimmed.indexOf('#')
+      const beforeHash = hashIdx >= 0 ? trimmed.slice(0, hashIdx) : trimmed
+      hash = hashIdx >= 0 ? trimmed.slice(hashIdx) : ''
+      const qIdx = beforeHash.indexOf('?')
+      baseUrl = qIdx >= 0 ? beforeHash.slice(0, qIdx) : beforeHash
+      rawQuery = qIdx >= 0 ? beforeHash.slice(qIdx + 1) : ''
+    }
+  } else {
+    const hashIdx = trimmed.indexOf('#')
+    const beforeHash = hashIdx >= 0 ? trimmed.slice(0, hashIdx) : trimmed
+    hash = hashIdx >= 0 ? trimmed.slice(hashIdx) : ''
+    const qIdx = beforeHash.indexOf('?')
+    if (qIdx >= 0) {
+      baseUrl = beforeHash.slice(0, qIdx)
+      rawQuery = beforeHash.slice(qIdx + 1)
+    } else if (beforeHash.includes('=') || beforeHash.startsWith('&')) {
+      rawQuery = beforeHash.replace(/^&+/, '')
+    } else {
+      baseUrl = beforeHash
+    }
+  }
+
+  const params: QueryParamItem[] = []
+  const jsonObject: Record<string, string | string[]> = {}
+
+  if (rawQuery) {
+    for (const pair of rawQuery.split('&')) {
+      if (!pair) continue
+      const eqIdx = pair.indexOf('=')
+      const rawKey = eqIdx >= 0 ? pair.slice(0, eqIdx) : pair
+      const rawVal = eqIdx >= 0 ? pair.slice(eqIdx + 1) : ''
+      const key = safeDecodeQueryPart(rawKey)
+      const value = safeDecodeQueryPart(rawVal)
+      params.push({ id: makeParamId(), key, value, enabled: true })
+
+      const prev = jsonObject[key]
+      if (prev === undefined) {
+        jsonObject[key] = value
+      } else if (Array.isArray(prev)) {
+        prev.push(value)
+      } else {
+        jsonObject[key] = [prev, value]
+      }
+    }
+  }
+
+  return { isValidUrl, baseUrl, protocol, host, pathname, hash, params, jsonObject }
+}
+
+export function buildUrlFromParams(
+  baseUrl: string,
+  params: QueryParamItem[],
+  hash = '',
+  plusForSpace = false,
+): { fullUrl: string; queryString: string; jsonObject: Record<string, string | string[]> } {
+  const encodePart = (s: string) => {
+    const encoded = encodeURIComponent(s)
+    return plusForSpace ? encoded.replace(/%20/g, '+') : encoded
+  }
+
+  const jsonObject: Record<string, string | string[]> = {}
+  const activePairs: string[] = []
+  for (const item of params) {
+    if (!item.enabled || !item.key.trim()) continue
+    const k = item.key
+    const v = item.value
+    activePairs.push(`${encodePart(k)}=${encodePart(v)}`)
+
+    const prev = jsonObject[k]
+    if (prev === undefined) {
+      jsonObject[k] = v
+    } else if (Array.isArray(prev)) {
+      prev.push(v)
+    } else {
+      jsonObject[k] = [prev, v]
+    }
+  }
+
+  const queryString = activePairs.join('&')
+  const cleanBase = baseUrl.trim()
+  const cleanHash = hash.trim() ? (hash.trim().startsWith('#') ? hash.trim() : `#${hash.trim()}`) : ''
+  const fullUrl = `${cleanBase}${queryString ? `?${queryString}` : ''}${cleanHash}`
+
+  return { fullUrl, queryString, jsonObject }
+}
+
